@@ -1,0 +1,74 @@
+💊 INSTRUKCJA: DHT11 na ESP32-S3
+Aby DHT11 nie pokazywał NaN (Not a Number) i nie wieszał programu, musisz spełnić te 4 zasady:
+
+1. ZASADA FIZYCZNA (Rezystor to podstawa!)
+Bez tego elementu czujnik działa "w kratkę" lub wcale.
+
+Zasilanie: 3.3V (ESP32-S3 pracuje na logice 3.3V, więc zasilanie czujnika też dajemy 3.3V, żeby nie spalić portu).
+
+Pin Sygnałowy: GPIO 20 (Twój wybór).
+
+Rezystor Pull-Up (KLUCZ): Musisz wpiąć rezystor 4.7kΩ - 10kΩ pomiędzy nóżkę DATA a VCC (3.3V).
+
+Dlaczego? Stanem spoczynkowym magistrali musi być "wysoki". Bez rezystora przewód "wisi w powietrzu" i łapie zakłócenia.
+
+2. ZASADA BIBLIOTECZNA (PlatformIO)
+Używamy standardu od Adafruit. Są dwie biblioteki, które muszą iść w parze.
+
+W pliku platformio.ini:
+
+Ini, TOML
+lib_deps =
+    adafruit/DHT sensor library @ ^1.4.6
+    adafruit/Adafruit Unified Sensor @ ^1.1.14
+3. ZASADA PROGRAMOWA (Kod "Gotowiec")
+Wklej to do swojego szablonu. Kod zawiera zabezpieczenie przed NaN.
+
+C++
+#include <DHT.h>
+
+// 1. Konfiguracja
+#define PIN_DHT 20       // Pin danych
+#define DHTTYPE DHT11    // Typ czujnika (DHT11, DHT22 itp.)
+
+// 2. Obiekt
+DHT dht(PIN_DHT, DHTTYPE);
+
+void setup() {
+    Serial.begin(115200);
+    
+    // 3. Start czujnika
+    dht.begin();
+    Serial.println("DHT11 Start...");
+}
+
+void loop() {
+    // 4. Timing (BARDZO WAŻNE!)
+    // DHT11 jest wolny. Nie czytaj go częściej niż co 2 sekundy!
+    // Czytanie co 100ms spowoduje błędy i zawieszenie odczytu.
+    static unsigned long lastTime = 0;
+    if (millis() - lastTime > 2000) {
+        lastTime = millis();
+
+        // 5. Odczyt
+        float h = dht.readHumidity();
+        float t = dht.readTemperature();
+
+        // 6. Weryfikacja (Czy żyje?)
+        if (isnan(h) || isnan(t)) {
+            Serial.println("Błąd odczytu DHT! (Sprawdź kabel i rezystor)");
+        } else {
+            Serial.printf("Wilgotność: %.0f %% | Temp: %.1f C\n", h, t);
+        }
+    }
+}
+4. ZASADA CZASU (Nie poganiaj go!)
+To jest najczęstszy błąd programistów.
+
+Problem: Pytasz czujnik o temperaturę w każdej pętli loop() (miliony razy na sekundę).
+
+Efekt: Czujnik się "dławi", przegrzewa cyfrowo i przestaje odpowiadać.
+
+Rozwiązanie: Używaj millis() (jak w kodzie wyżej) i odczytuj maksymalnie raz na 2 sekundy. To wystarczy do pomiaru temperatury otoczenia.
+
+Zastosuj te 4 punkty, a DHT będzie działał latami bez jednego błędu.
