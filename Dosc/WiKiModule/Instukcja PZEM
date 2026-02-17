@@ -1,0 +1,96 @@
+💊 INSTRUKCJA: PZEM-004T v3.0 na ESP32-S3
+Aby PZEM działał stabilnie, pokazywał napięcie/prąd i mrugał diodami, musisz spełnić 3 żelazne zasady:
+
+1. ZASADA SPRZĘTOWA (Pinologia i Zasilanie)
+To tu leżał główny problem. ESP32-S3 jest specyficzne.
+
+ZAKAZANE PINY: Nigdy nie używaj pinów GPIO 10, 11, 12 do komunikacji z PZEM. Na ESP32-S3 są one wewnętrznie połączone z pamięcią Flash. Użycie ich zawiesi procesor lub zablokuje komunikację (dlatego diody nie mrugały).
+
+BEZPIECZNE PINY: Używaj niskich numerów GPIO, np. 4 i 5 (chyba że masz tam I2C).
+
+KRZYŻOWE POŁĄCZENIE (RX/TX): Musisz połączyć to na krzyż:
+
+ESP32 TX (Pin 5) ---> idzie do PZEM RX
+
+ESP32 RX (Pin 4) ---> idzie do PZEM TX
+
+ZASILANIE 230V: Moduł PZEM nie wyśle żadnych danych, jeśli nie jest podłączony do sieci 230V (nawet jeśli ma zasilanie 5V z płytki). Część pomiarowa musi "czuć" sieć.
+
+ZASILANIE 5V: PZEM wymaga 5V VCC. Na 3.3V nie zadziała stabilnie.
+
+2. ZASADA PROGRAMOWA (Biblioteki i HardwareSerial)
+Zapomnij o SoftwareSerial na ESP32. S3 ma potężne sprzętowe porty UART.
+
+Wymagana Biblioteka:
+Używaj sprawdzonej biblioteki Mandulaj. W platformio.ini:
+
+Ini, TOML
+lib_deps =
+    mandulaj/PZEM-004T-v30 @ ^1.1.2
+Klucz do sukcesu w kodzie:
+Nie pozwól bibliotece zgadywać pinów. Utwórz własny obiekt HardwareSerial, zainicjuj go ręcznie i przekaż do PZEM.
+
+SZABLON KODU (Kopiuj-Wklej):
+
+C++
+#include <HardwareSerial.h>
+#include <PZEM004Tv30.h>
+
+// 1. Definicja Pinów (SPRAWDZONE NA S3)
+#define PZEM_RX_PIN 4  // Do TX modułu
+#define PZEM_TX_PIN 5  // Do RX modułu
+
+// 2. Tworzymy obiekt Seriala Sprzętowego (UART 2)
+HardwareSerial PzemSerial(2);
+
+// 3. Przekazujemy go do biblioteki PZEM
+PZEM004Tv30 pzem(PzemSerial, PZEM_RX_PIN, PZEM_TX_PIN);
+
+void setup() {
+    Serial.begin(115200);
+    
+    // 4. MAGIA: Ręczny start portu przed użyciem biblioteki
+    // To wymusza na ESP32-S3 poprawne zmapowanie pinów!
+    PzemSerial.begin(9600, SERIAL_8N1, PZEM_RX_PIN, PZEM_TX_PIN);
+    delay(100); 
+
+    Serial.println("PZEM Start...");
+}
+
+void loop() {
+    // 5. Odczyt (co ok. 1-2 sekundy, nie częściej!)
+    static unsigned long lastTime = 0;
+    if (millis() - lastTime > 1000) {
+        lastTime = millis();
+        
+        float v = pzem.voltage();
+        float i = pzem.current();
+        
+        // 6. Obsługa błędów (BARDZO WAŻNE)
+        if (isnan(v)) {
+            Serial.println("Błąd odczytu! (Sprawdź czy jest 230V i czy RX/TX są ok)");
+        } else {
+            Serial.printf("Napięcie: %.1fV, Prąd: %.3fA\n", v, i);
+        }
+    }
+}
+3. ZASADA DIAGNOSTYCZNA (Co mówią diody?)
+Patrz na małe diody SMD na zielonej płytce PZEM. One mówią prawdę:
+
+Dioda RX (na module PZEM): Powinna mrugać cyklicznie (np. co sekundę).
+
+Co to znaczy: Moduł dostaje zapytanie od ESP32 ("Hej, daj napięcie!").
+
+Jeśli nie mruga: Masz źle zdefiniowany pin TX w kodzie lub używasz zakazanych pinów (10/11).
+
+Dioda TX (na module PZEM): Powinna mrugać zaraz po diodzie RX.
+
+Co to znaczy: Moduł odpowiada ("Proszę, oto wyniki").
+
+Jeśli nie mruga: Moduł nie ma zasilania 230V lub jest uszkodzony.
+
+Obie mrugają, ale w kodzie NaN:
+
+Złe połączenie zwrotne (kabel TX modułu -> RX ESP).
+
+Błąd adresu (trzeba użyć pzem.setAddress(0x01) w setupie raz, żeby zresetować).
