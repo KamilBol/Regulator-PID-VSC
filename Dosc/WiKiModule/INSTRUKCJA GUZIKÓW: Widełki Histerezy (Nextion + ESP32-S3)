@@ -1,0 +1,79 @@
+🎛 INSTRUKCJA GUZIKÓW: Widełki Histerezy (Nextion + ESP32-S3)1. SPRZĘT (Co i jak podpiąć)Do stabilnej pracy wyświetlacza i "widełek" potrzebujesz połączenia sprzętowego UART.Wyświetlacz: Nextion (Seria Basic NX... wystarczy, ale Enhanced NX...K jest szybsza).Moduł: ESP32-S3.Zasilanie: Nextion musi mieć solidne 5V (osobny zasilacz lub bardzo dobre USB). Jeśli ekran mruga przy dotyku -> masz za słaby prąd.Schemat połączeń (Pinologia dla UART1 w S3):To połączenie krzyżowe. Nie używaj UART0 (piny 43/44), bo to blokuje wgrywanie kodu!ESP32-S3 PinNextion PinKolor kabla (zazwyczaj)GPIO 18 (TX)RXNiebieskiGPIO 17 (RX)TXŻółty5V (VCC)5VCzerwonyGNDGNDCzarny2. SOFTWARE (Biblioteki)Nie używaj oficjalnej biblioteki ITEAD (jest trudna w konfiguracji). Użyj biblioteki EasyNextionLibrary, która jest standardem dla szybkich projektów.W PlatformIO: Dodaj do platformio.ini:Ini, TOMLlib_deps = 
+    seithan/EasyNextionLibrary @ ^1.0.6
+3. NEXTION EDITOR (Co wyklikać na ekranie)Tutaj tworzymy "bajkę" wizualną. Zakładamy, że to Page 7 (index 7).Krok A: Elementy UIPrzeciągnij na scenę:Slider (h0): To będą widełki MIN (np. włącz przy 20°C).Slider (h1): To będą widełki MAX (np. wyłącz przy 50°C).Number (n0): Wyświetla wartość suwaka MIN.Number (n1): Wyświetla wartość suwaka MAX.Button (b0): Przycisk "ZAPISZ" (żeby wysłać dane do ESP).Krok B: Kod wewnątrz Nextion (Events)Musisz oprogramować zachowanie suwaków bezpośrednio w edytorze, żeby liczby zmieniały się płynnie pod palcem.Dla suwaka h0 (Touch Move Event):Cn0.val=h0.val  // Przepisuje pozycję suwaka do okienka z liczbą
+Dla suwaka h1 (Touch Move Event):Cn1.val=h1.val
+Dla przycisku b0 (Touch Release Event):To jest klucz! Kiedy klikniesz ZAPISZ, ekran wyśle specjalny kod do ESP.Cprinth 23 05   // Wyślij "Trigger" (kod heksadecymalny, który wyłapiemy w ESP)
+Ustawienie ID: Zapamiętaj, że jesteśmy na stronie 7. Suwaki mają nazwy h0 i h1.4. KOD (C++ dla ESP32-S3)Ten kod robi dwie rzeczy:Nasłuchuje przycisku "ZAPISZ".Jak go usłyszy -> pobiera wartości widełek z ekranu i ustawia sterowanie.C++#include <Arduino.h>
+#include "EasyNextionLibrary.h"
+
+// Definicja portu Serial dla ESP32-S3 (RX=17, TX=18)
+// EasyNextion domyślnie szuka Serial2, musimy go zainicjować ręcznie.
+EasyNex myNex(Serial1); 
+
+// Zmienne na widełki
+int tempMin = 20; // Domyślnie
+int tempMax = 50; // Domyślnie
+
+// --- FUNKCJA ODCZYTUJĄCA WIDEŁKI ---
+// Wywołujemy ją tylko, gdy wciśniesz guzik na ekranie
+void aktualizujWidelki() {
+    // Odczytujemy wartości suwaków ze strony 7 (page7.h0 i page7.h1)
+    // UWAGA: Funkcja readNumber wymaga nazwy w formacie "pageName.objName"
+    
+    // Przechodzimy na stronę 7 wirtualnie (opcjonalne, ale bezpieczne)
+    // myNex.writeStr("page 7"); 
+    
+    int nowyMin = myNex.readNumber("page7.h0.val");
+    int nowyMax = myNex.readNumber("page7.h1.val");
+
+    // Zabezpieczenie przed błędami (np. gdy min > max)
+    if (nowyMin != 777777 && nowyMax != 777777) { // 777777 to kod błędu biblioteki
+        if (nowyMin < nowyMax) {
+            tempMin = nowyMin;
+            tempMax = nowyMax;
+            Serial.println("--- ZAKTUALIZOWANO WIDEŁKI ---");
+            Serial.printf("START (Min): %d | STOP (Max): %d\n", tempMin, tempMax);
+        } else {
+            Serial.println("Błąd: Min nie może być większe od Max!");
+        }
+    }
+}
+
+// --- TRIGGER (Wywoływany przez komendę printh 23 05 z ekranu) ---
+void trigger0() {
+  // Ta funkcja uruchomi się sama, jak biblioteka zobaczy kod
+  aktualizujWidelki();
+}
+
+void setup() {
+    Serial.begin(115200); // Debug na USB
+    
+    // Start komunikacji z Nextion (S3 wymaga podania pinów!)
+    // Serial1.begin(baud, config, rx, tx)
+    Serial1.begin(9600, SERIAL_8N1, 17, 18); 
+    
+    myNex.begin(9600); // Start biblioteki
+    
+    Serial.println("System Start. Czekam na ustawienie widełek...");
+}
+
+void loop() {
+    // 1. To musi być w pętli - nasłuchuje ekranu
+    myNex.NextionListen();
+
+    // 2. Prosta logika sterowania (Symulacja)
+    // Odczytaj swój czujnik tutaj, np. float temp = dht.readTemperature();
+    // Tutaj dla testu wpisuję na sztywno:
+    int aktualnaTemperatura = 45; 
+
+    // LOGIKA WIDEŁEK (HISTEREZA)
+    if (aktualnaTemperatura <= tempMin) {
+        // Włącz grzanie (bo spadło poniżej minimum)
+        // digitalWrite(PIN_PRZEKAZNIKA, HIGH);
+    } 
+    else if (aktualnaTemperatura >= tempMax) {
+        // Wyłącz grzanie (bo osiągnęło maksimum)
+        // digitalWrite(PIN_PRZEKAZNIKA, LOW);
+    }
+}
+JAK TO DZIAŁA W PRAKTYCE? (Instrukcja obsługi)Użytkownik przesuwa suwaki na ekranie. Widzi jak zmieniają się liczby (dzięki kodzie w Nextion Editor).ESP32 na razie nic nie robi (nie obciążamy procesora ciągłym pytaniem).Użytkownik klika przycisk "ZAPISZ".Ekran wysyła tajny kod (printh 23 05).ESP32 w funkcji myNex.NextionListen() wyłapuje ten kod.ESP32 "pyta" ekran: "Dobra, to jakie masz tam teraz wartości na h0 i h1?".Ekran odsyła wartości, a ESP32 aktualizuje zmienne tempMin i tempMax.
