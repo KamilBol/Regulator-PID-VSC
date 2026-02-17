@@ -1,0 +1,96 @@
+💊 INSTRUKCJA: LOGOWANIE DANYCH NA SD (ESP32-S3)
+Aby karta SD działała stabilnie, zapisywała pliki .csv i nie sypała błędami Mount Failed, musisz spełnić te 3 zasady:
+
+1. ZASADA FIZYCZNA (Format i Piny)
+To jest najczęstszy powód błędu (13) There is no valid FAT volume.
+
+SYSTEM PLIKÓW: Karta MUSI być sformatowana w FAT32.
+
+Format exFAT (domyślny dla kart >32GB) NIE ZADZIAŁA.
+
+Format NTFS NIE ZADZIAŁA.
+
+ROZMIAR: Najlepiej używać kart od 4GB do 32GB. Jeśli masz kartę 64GB+, musisz użyć programu GUIFormat na Windows, aby wymusić FAT32.
+
+ALOKACJA: Przy formatowaniu wybierz "Rozmiar jednostki alokacji" na 32 kilobajty (32768).
+
+PINOLOGIA (SPI dla Twojego projektu):
+
+CS (Chip Select): Pin 15
+
+SCK (Clock): Pin 16
+
+MOSI (Data Out): Pin 17
+
+MISO (Data In): Pin 18
+
+2. ZASADA PROGRAMOWA (Inicjalizacja SPI)
+ESP32-S3 ma piny SPI w innym miejscu niż "zwykłe" ESP32. Biblioteka SD.h o tym nie wie, więc szuka karty tam, gdzie jej nie ma.
+
+Rozwiązanie: Musisz ręcznie uruchomić magistralę SPI na swoich pinach PRZED uruchomieniem karty SD.
+
+Kod Inicjalizacji (Setup):
+
+C++
+#include <SPI.h>
+#include <SD.h>
+
+#define SD_CS   15
+#define SD_SCK  16
+#define SD_MOSI 17
+#define SD_MISO 18
+
+void setup() {
+    Serial.begin(115200);
+
+    // KROK 1: Ręczne przypisanie pinów SPI
+    // Bez tej linijki ESP32-S3 nie znajdzie czytnika!
+    SPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
+
+    // KROK 2: Start Karty
+    if (!SD.begin(SD_CS)) {
+        Serial.println("BŁĄD SD: Sprawdź format FAT32 i kable!");
+        return;
+    }
+    
+    // Opcjonalnie: Sprawdzenie typu karty
+    uint8_t cardType = SD.cardType();
+    if(cardType == CARD_NONE) {
+        Serial.println("Nie wykryto karty fizycznie");
+        return;
+    }
+    
+    Serial.println("SD OK - Gotowa do pracy");
+}
+3. ZASADA ZAPISU (Otwórz -> Zapisz -> Zamknij)
+Nigdy nie trzymaj pliku otwartego przez cały czas pracy programu. Jeśli braknie prądu, stracisz dane.
+Zasada jest prosta: Otwierasz plik tylko na ułamek sekundy, dopisujesz linijkę i natychmiast zamykasz.
+
+Wzór funkcji Logującej (Loop):
+
+C++
+void logujDane(float napiecie, float prad) {
+    // 1. Otwieramy plik w trybie DOPISYWANIA (FILE_APPEND)
+    // Jeśli plik nie istnieje, biblioteka sama go stworzy.
+    File plik = SD.open("/pomiary.csv", FILE_APPEND);
+
+    if (plik) {
+        // 2. Tworzymy linię tekstu (CSV - wartości oddzielone średnikiem)
+        // Przykład: "12500;230.5;5.120"
+        String linia = String(millis()) + ";" + String(napiecie, 1) + ";" + String(prad, 3);
+        
+        // 3. Zapisujemy i ZAMYKAMY (Zapis fizyczny następuje przy close)
+        plik.println(linia);
+        plik.close(); 
+        
+        Serial.println("Zapisano: " + linia);
+    } else {
+        Serial.println("Błąd otwarcia pliku!");
+    }
+}
+Najczęstsze błędy (Troubleshooting):
+Mount Failed / Error 13: Karta ma zły format (exFAT/NTFS). Sformatuj na FAT32.
+
+Pusty plik: Zapomniałeś dodać plik.close(). Dane wisiały w buforze i nie trafiły na kartę.
+
+System wisi: Próbujesz zapisywać zbyt często (np. co 10ms). Karta SD jest wolna. Zapisuj dane co 1-2 sekundy.
