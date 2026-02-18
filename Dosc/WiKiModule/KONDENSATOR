@@ -1,0 +1,25 @@
+💊 PIGUŁKA WIEDZY: KONDENSATOR 
+Do wklejenia na GitHuba / Dokumentacji
+
+Aby wyeliminować "cykanie" przekaźników i restarty ESP32 przy pracy z WiFi/Modbus/Ekranem na samym zasilaczu, należy wlutować kondensator buforujący.
+
+1. Parametry kondensatora:
+
+Typ: Elektrolityczny (Beczka).
+
+Pojemność: Od 470µF do 1000µF (im więcej, tym lepiej dla startu).
+
+Napięcie: Minimum 10V (zalecane 16V lub 25V).
+
+Temperatura: Standard 85°C lub 105°C (bez znaczenia tutaj).
+
+2. Gdzie wlutować?
+
+Wlutuj go bezpośrednio w piny zasilania płytki ESP32-S3 lub na płytkę stykową/PCB, jak najbliżej procesora.
+
+PLUS (+) kondensatora -> do pinu 5V (lub VIN) na ESP32.
+
+MINUS (-) kondensatora (pasek na obudowie) -> do pinu GND na ESP32.
+
+3. Cel:
+Działa jak "wiadro z prądem". Gdy ESP32 włącza WiFi i przekaźniki, pobór prądu skacze. Zasilacz nie zdąży zareagować, ale kondensator odda zgromadzoną energię, utrzymując napięcie powyżej 3V i zapobiegając resetowi (Brownout).
