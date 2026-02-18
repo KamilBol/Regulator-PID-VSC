@@ -7,44 +7,47 @@
 #include <DFRobot_GP8403.h>
 #include <PID_v1.h>
 #include <DHT.h>
+#include <ModbusMaster.h>
 
 // ================================================================
-// 1. PINOLOGIA (Hardcoded - SPRAWDZONE)
+// 1. PINOLOGIA
 // ================================================================
-// PZEM - Piny 4 i 5 (HardwareSerial 2)
-#define PIN_PZEM_RX     4   // TX Modułu -> Pin 4 ESP
-#define PIN_PZEM_TX     5   // RX Modułu -> Pin 5 ESP
-
-// NEXTION - Piny 13 i 14 (HardwareSerial 1)
+#define PIN_PZEM_RX     4
+#define PIN_PZEM_TX     5
+#define PIN_RS485_RX    1
+#define PIN_RS485_TX    2
+#define PIN_RS485_DE    6
+#define PIN_RELAY_1     47
+#define PIN_RELAY_2     48
 #define PIN_NEXT_RX     13
 #define PIN_NEXT_TX     14
-
-// DHT11 - Pin 20
 #define PIN_DHT         20
-#define DHTTYPE         DHT11
-
-// SD CARD
 #define PIN_SD_CS       15
 #define PIN_SD_SCK      16
 #define PIN_SD_MOSI     17
 #define PIN_SD_MISO     18
+#define PIN_DAC_SDA     41  // Pin D na module DAC
+#define PIN_DAC_SCL     40  // Pin C na module DAC
 
-// DAC
-#define PIN_DAC_SDA     41
-#define PIN_DAC_SCL     40
+// LOGIKA PRZEKAŹNIKÓW (Low Trigger)
+#define RELAY_ON        LOW
+#define RELAY_OFF       HIGH
 
 // ================================================================
 // 2. OBIEKTY
 // ================================================================
 HardwareSerial NextionSerial(1);
 HardwareSerial PzemSerial(2);
+HardwareSerial ModbusSerial(0);
 
-// Używamy EasyNex tylko do wysyłania (writeStr)
-EasyNex myNex(NextionSerial); 
-
+EasyNex myNex(NextionSerial);
 PZEM004Tv30 pzem(PzemSerial, PIN_PZEM_RX, PIN_PZEM_TX);
-DFRobot_GP8403 dac(&Wire, 0x58);
-DHT dht(PIN_DHT, DHTTYPE);
+
+// POPRAWKA ADRESU DAC: Skoro przełączniki są w górze (ON/1), to adres to 0x5F
+DFRobot_GP8403 dac(&Wire, 0x5F); 
+
+DHT dht(PIN_DHT, DHT11);
+ModbusMaster node;
 
 // PID
 double Setpoint = 5.0, Input, Output;
@@ -53,116 +56,148 @@ PID myPID(&Input, &Output, &Setpoint, 2, 5, 1, DIRECT);
 // Zmienne Systemowe
 float minLimit = 10.0;
 float maxLimit = 40.0;
-bool systemON = false;
-bool modeAUTO = true;
+bool systemON = false;    
+bool modeAUTO = true;     
+float currentDac1 = 0.0;
+float currentDac2 = 0.0;
+String logFileName = "/log_000.csv";
 
 // Timery
 unsigned long lastUpdate = 0;
-
-// Obsługa przytrzymania przycisku
-int activeButtonID = 0;       // Który przycisk jest trzymany?
-unsigned long buttonHoldTimer = 0; // Czas od ostatniej zmiany
-bool isButtonHeld = false;    // Czy przycisk jest trzymany?
+unsigned long lastLogTime = 0;
+unsigned long resetPressTime = 0;
+bool isResetPressed = false;
 
 // ================================================================
 // 3. FUNKCJE POMOCNICZE
 // ================================================================
+void preTransmission() { digitalWrite(PIN_RS485_DE, HIGH); }
+void postTransmission() { digitalWrite(PIN_RS485_DE, LOW); }
+
+void scanI2C() {
+    Serial.println("[I2C] Skanowanie (Szukam DACa)...");
+    byte error, address;
+    int nDevices = 0;
+    for(address = 1; address < 127; address++ ) {
+        Wire.beginTransmission(address);
+        error = Wire.endTransmission();
+        if (error == 0) {
+            Serial.print("[I2C] Znalazlem: 0x");
+            Serial.println(address,HEX);
+            if(address == 0x5F) Serial.println(">>> TO TWÓJ DAC! ADRES OK.");
+            nDevices++;
+        }
+    }
+    if (nDevices == 0) Serial.println("[I2C] PUSTO! Sprawdz kable D/C i zasilanie.");
+}
+
+void initSD() {
+    SPI.begin(PIN_SD_SCK, PIN_SD_MISO, PIN_SD_MOSI, PIN_SD_CS);
+    if(!SD.begin(PIN_SD_CS)) {
+        Serial.println("[SD] BLAD!");
+        myNex.writeStr("sd.txt", "ERR");
+        return;
+    }
+    
+    int i = 0;
+    while(true) {
+        logFileName = "/log_" + String(i) + ".csv";
+        if(!SD.exists(logFileName)) break;
+        i++;
+    }
+    
+    File f = SD.open(logFileName, FILE_WRITE);
+    if(f) {
+        f.println("Czas_ms;SystemON;I;U;P;DAC1;DAC2");
+        f.close();
+        Serial.println("[SD] Utworzono: " + logFileName);
+    }
+}
+
+void startRegulator() {
+    systemON = true;
+    myNex.writeStr("pidonoff.txt", "ON");
+    digitalWrite(PIN_RELAY_1, RELAY_ON);
+    digitalWrite(PIN_RELAY_2, RELAY_ON);
+    
+    currentDac1 = 5.00; 
+    currentDac2 = currentDac1 * 0.90;
+    
+    // Ustawiamy napięcie na fizycznym DAC
+    dac.setDACOutVoltage(currentDac1 * 1000, 0);
+    dac.setDACOutVoltage(currentDac2 * 1000, 1);
+    Serial.println("[SYS] START -> DAC SET 5V");
+}
+
+void stopRegulator() {
+    systemON = false;
+    myNex.writeStr("pidonoff.txt", "OFF");
+    digitalWrite(PIN_RELAY_1, RELAY_OFF);
+    digitalWrite(PIN_RELAY_2, RELAY_OFF);
+    
+    currentDac1 = 0.00;
+    currentDac2 = 0.00;
+    dac.setDACOutVoltage(0, 0);
+    dac.setDACOutVoltage(0, 1);
+    Serial.println("[SYS] STOP -> DAC SET 0V");
+}
 
 void updateSettingsScreen() {
     myNex.writeStr("min.txt", String(minLimit, 1));
     myNex.writeStr("max.txt", String(maxLimit, 1));
 }
 
-void togglePID() {
-    systemON = !systemON;
-    myNex.writeStr("pidonoff.txt", systemON ? "ON" : "OFF");
-    Serial.println(systemON ? "PID: ON" : "PID: OFF");
-}
-
-void toggleMode() {
-    modeAUTO = !modeAUTO;
-    myNex.writeStr("pracaautoman.txt", modeAUTO ? "AUT" : "MAN");
-    Serial.println(modeAUTO ? "TRYB: AUTO" : "TRYB: MANUAL");
-}
-
-// ================================================================
-// 4. LOGIKA PRZYCISKÓW (PRESS & HOLD)
-// ================================================================
 void processButtonAction(int id) {
-    // Ta funkcja wykonuje się raz przy kliknięciu, lub cyklicznie przy trzymaniu
-    
-    if (id == 1) { // PLUS MIN
-        minLimit += 0.1;
-        if(minLimit > maxLimit) minLimit = maxLimit; // Zabezpieczenie
-        updateSettingsScreen();
-    }
-    if (id == 2) { // MINUS MIN
-        minLimit -= 0.1;
-        if(minLimit < 0) minLimit = 0;
-        updateSettingsScreen();
-    }
-    if (id == 3) { // PLUS MAX
-        maxLimit += 0.1;
-        if(maxLimit > 100) maxLimit = 100;
-        updateSettingsScreen();
-    }
-    if (id == 4) { // MINUS MAX
-        maxLimit -= 0.1;
-        if(maxLimit < minLimit) maxLimit = minLimit;
-        updateSettingsScreen();
-    }
+    if (id == 1) { minLimit += 0.1; if(minLimit > maxLimit) minLimit = maxLimit; updateSettingsScreen(); }
+    if (id == 2) { minLimit -= 0.1; if(minLimit < 0) minLimit = 0; updateSettingsScreen(); }
+    if (id == 3) { maxLimit += 0.1; if(maxLimit > 100) maxLimit = 100; updateSettingsScreen(); }
+    if (id == 4) { maxLimit -= 0.1; if(maxLimit < minLimit) maxLimit = minLimit; updateSettingsScreen(); }
 }
 
-// Główny Parser Nextiona
+// ================================================================
+// 4. PARSER DOTYKU
+// ================================================================
+int activeButtonID = 0;
+unsigned long buttonHoldTimer = 0;
+bool isButtonHeld = false;
+
 void handleNextionInput() {
     while (NextionSerial.available()) {
         byte b = NextionSerial.read();
-        
-        // Szukamy nagłówka 0x65 (Touch Event)
         if (b == 0x65) {
-            delay(5); // Krótkie czekanie na resztę
+            delay(5);
             if (NextionSerial.available() >= 3) {
                 byte pageId = NextionSerial.read();
                 byte cmpId  = NextionSerial.read();
-                byte event  = NextionSerial.read(); // 0x01=Press, 0x00=Release
-                
-                // Czyścimy resztę (FF FF FF)
+                byte event  = NextionSerial.read(); 
                 while (NextionSerial.available()) NextionSerial.read();
 
-                // ---------------- LOGIKA ----------------
-                
-                // STRONA 0 (GŁÓWNA) - Tu nie ma trzymania, tylko klik
-                if (pageId == 0 && event == 0x01) { // Tylko przy naciśnięciu
-                    if (cmpId == 11) togglePID();   // Przycisk PID
-                    if (cmpId == 12) toggleMode();  // Przycisk AUTO/MAN
-                    if (cmpId == 8)  ESP.restart(); // RESET
+                if (pageId == 0) {
+                    if (cmpId == 11 && event == 0x01) { 
+                        if(systemON) stopRegulator(); else startRegulator(); 
+                    }
+                    if (cmpId == 12 && event == 0x01) { 
+                        modeAUTO = !modeAUTO;
+                        myNex.writeStr("pracaautoman.txt", modeAUTO ? "AUT" : "MAN");
+                    }
+                    if (cmpId == 8) {
+                        if (event == 0x01) { isResetPressed = true; resetPressTime = millis(); myNex.writeStr("logi0.txt", "Trzymaj 5s..."); }
+                        else if (event == 0x00) { isResetPressed = false; myNex.writeStr("logi0.txt", "..."); }
+                    }
                 }
-
-                // STRONA 2 (USTAWIENIA) - Tu obsługujemy trzymanie
                 if (pageId == 2) {
-                    if (event == 0x01) { 
-                        // WCIŚNIĘCIE (PRESS)
-                        activeButtonID = cmpId;
-                        isButtonHeld = true;
-                        processButtonAction(activeButtonID); // Wykonaj od razu raz
-                        buttonHoldTimer = millis() + 400;    // Czekaj 400ms zanim zaczniesz przewijać
-                    }
-                    else if (event == 0x00) {
-                        // PUSZCZENIE (RELEASE)
-                        activeButtonID = 0;
-                        isButtonHeld = false;
-                    }
+                    if (event == 0x01) { activeButtonID = cmpId; isButtonHeld = true; processButtonAction(activeButtonID); buttonHoldTimer = millis() + 400; }
+                    else if (event == 0x00) { activeButtonID = 0; isButtonHeld = false; }
                 }
             }
         }
     }
-
-    // Obsługa "Trzymania" (Auto-scroll)
-    if (isButtonHeld && activeButtonID > 0) {
-        if (millis() > buttonHoldTimer) {
-            processButtonAction(activeButtonID);
-            buttonHoldTimer = millis() + 100; // Szybkość przewijania (100ms)
-        }
+    if (isButtonHeld && activeButtonID > 0 && millis() > buttonHoldTimer) {
+        processButtonAction(activeButtonID);
+        buttonHoldTimer = millis() + 100;
+    }
+    if (isResetPressed && (millis() - resetPressTime > 5000)) {
+        myNex.writeStr("logi0.txt", "RESTART!"); delay(500); ESP.restart();
     }
 }
 
@@ -170,36 +205,62 @@ void handleNextionInput() {
 // 5. SETUP
 // ================================================================
 void setup() {
-    delay(1000); 
     Serial.begin(115200);
-    Serial.println("\n\n--- ALIENWARE SYSTEM v4.0 (HOLD FIX) ---");
+    delay(2000); 
+    
+    Serial.println("\n--- ALIENWARE V12.0 (DAC ADDRESS FIX) ---");
 
-    // 1. NEXTION
+    // Przekaźniki OFF
+    pinMode(PIN_RELAY_1, OUTPUT);
+    pinMode(PIN_RELAY_2, OUTPUT);
+    digitalWrite(PIN_RELAY_1, RELAY_OFF);
+    digitalWrite(PIN_RELAY_2, RELAY_OFF);
+
+    // RS485
+    pinMode(PIN_RS485_DE, OUTPUT);
+    digitalWrite(PIN_RS485_DE, LOW);
+    ModbusSerial.begin(9600, SERIAL_8N1, PIN_RS485_RX, PIN_RS485_TX);
+    
+    // NEXTION
     NextionSerial.begin(9600, SERIAL_8N1, PIN_NEXT_RX, PIN_NEXT_TX);
     myNex.begin(9600);
     
-    // 2. PZEM (Powrót do metody manualnej)
+    // PZEM
+    delay(200);
     PzemSerial.begin(9600, SERIAL_8N1, PIN_PZEM_RX, PIN_PZEM_TX);
-    delay(200); 
     
-    // 3. DHT
+    // DHT
     dht.begin();
 
-    // 4. DAC
+    // DAC (Adres 0x5F)
     Wire.begin(PIN_DAC_SDA, PIN_DAC_SCL);
+    scanI2C(); // Zobacz w logach czy znajdzie 0x5F
+    
     if(dac.begin() != 0) {
-        Serial.println("DAC: Błąd I2C");
+        Serial.println("[DAC] Błąd komunikacji! (Czy na pewno adres 0x5F?)");
+        myNex.writeStr("logi0.txt", "DAC ERR");
     } else {
+        Serial.println("[DAC] Polaczono (Adres 0x5F OK).");
         dac.setDACOutRange(dac.eOutputRange10V);
+        
+        // TEST NAPIĘCIA: 5V na 5 sekund
+        Serial.println("--- TEST DAC 5V START ---");
+        dac.setDACOutVoltage(5000, 0);
+        dac.setDACOutVoltage(5000, 1);
+        myNex.writeStr("pod1.txt", "TEST 5V");
+        delay(5000); 
+        
+        // Powrót do 0V
         dac.setDACOutVoltage(0, 0);
+        dac.setDACOutVoltage(0, 1);
+        myNex.writeStr("pod1.txt", "0.00 V");
+        Serial.println("--- TEST DAC KONIEC ---");
     }
 
-    // 5. SD
-    SPI.begin(PIN_SD_SCK, PIN_SD_MISO, PIN_SD_MOSI, PIN_SD_CS);
-    SD.begin(PIN_SD_CS);
+    // SD
+    initSD();
 
-    // Domyślne stany
-    myPID.SetMode(AUTOMATIC);
+    // Domyślne stany GUI
     myNex.writeStr("pidonoff.txt", "OFF");
     myNex.writeStr("pracaautoman.txt", "AUT");
     
@@ -210,71 +271,72 @@ void setup() {
 // 6. LOOP
 // ================================================================
 void loop() {
-    // 1. NON-STOP: Obsługa dotyku
     handleNextionInput();
 
-    // 2. CO 1 SEKUNDĘ: Odczyt i Ekran
     if (millis() - lastUpdate >= 1000) {
         lastUpdate = millis();
 
-        // PZEM
         float u = pzem.voltage();
         float i = pzem.current();
         float p = pzem.power();
         float pf = pzem.pf();
-        
-        // DHT
         float t = dht.readTemperature();
         float h = dht.readHumidity();
 
-        // LOGIKA BŁĘDÓW I WYSYŁKA
-        if (isnan(u)) {
-            myNex.writeStr("napgr.txt", "ERR"); 
-            // Jeśli PZEM milczy, nie zeruj wszystkiego, tylko pokaż błąd napięcia
-        } else {
-            // Obliczenia
-            float s = u * i; 
-            float q = 0.0;
-            if (s > p) q = sqrt(s*s - p*p);
-
+        // PZEM
+        if(!isnan(u)) {
+            float s = u * i;
+            float q = (s > p) ? sqrt(s*s - p*p) : 0;
             char buf[16];
-            
-            // Strona 0
-            sprintf(buf, "%.3f A", i);
-            myNex.writeStr("granampery.txt", buf);
-            
-            // Strona 7
-            sprintf(buf, "%.1f V", u);
-            myNex.writeStr("napgr.txt", buf);
-            sprintf(buf, "%.3f A", i);
-            myNex.writeStr("natgr.txt", buf);
-            sprintf(buf, "%.0f W", p);
-            myNex.writeStr("mocczy.txt", buf);
-            sprintf(buf, "%.0f VA", s);
-            myNex.writeStr("mocpoz.txt", buf);
-            sprintf(buf, "%.0f Var", q);
-            myNex.writeStr("mocbie.txt", buf);
-            sprintf(buf, "%.2f", pf);
-            myNex.writeStr("wspmoc.txt", buf);
-
+            sprintf(buf, "%.3f A", i); myNex.writeStr("granampery.txt", buf); myNex.writeStr("natgr.txt", buf);
+            sprintf(buf, "%.1f V", u); myNex.writeStr("napgr.txt", buf);
+            sprintf(buf, "%.0f W", p); myNex.writeStr("mocczy.txt", buf);
+            sprintf(buf, "%.0f VA", s); myNex.writeStr("mocpoz.txt", buf);
+            sprintf(buf, "%.0f Var", q); myNex.writeStr("mocbie.txt", buf);
+            sprintf(buf, "%.2f", pf); myNex.writeStr("wspmoc.txt", buf);
             myNex.writeStr("logi0.txt", "OK");
+        } else {
+            myNex.writeStr("napgr.txt", "ERR");
         }
 
-        if (!isnan(t)) {
+        // DHT
+        if(!isnan(t)) {
             myNex.writeStr("temperatura.txt", String(t, 1));
             myNex.writeStr("wilgotnosc.txt", String(h, 0));
         }
+
+        // DAC Logic
+        if(systemON) {
+            currentDac1 = 5.00; 
+            currentDac2 = currentDac1 * 0.90;
+        } else {
+            currentDac1 = 0.00; 
+            currentDac2 = 0.00;
+        }
         
-        // DAC (Status)
+        // Fizyczne wysterowanie
+        dac.setDACOutVoltage(currentDac1 * 1000, 0);
+        dac.setDACOutVoltage(currentDac2 * 1000, 1);
+
+        // GUI
         char dacBuf[10];
-        sprintf(dacBuf, "%.2f V", systemON ? 5.00 : 0.00);
-        myNex.writeStr("pod1.txt", dacBuf);
-        myNex.writeStr("dac1.txt", dacBuf);
-        
-        // SD Info
+        sprintf(dacBuf, "%.2f V", currentDac1); myNex.writeStr("pod1.txt", dacBuf); myNex.writeStr("dac1.txt", dacBuf);
+        sprintf(dacBuf, "%.2f V", currentDac2); myNex.writeStr("pod2.txt", dacBuf); myNex.writeStr("dac2.txt", dacBuf);
+
+        // SD LOG
         if(SD.cardType() != CARD_NONE) {
-            float gb = SD.totalBytes() / (1024.0*1024.0*1024.0);
-            myNex.writeStr("sd.txt", String(gb, 1) + " GB");
+             float gb = SD.totalBytes() / (1024.0*1024.0*1024.0);
+             myNex.writeStr("sd.txt", String(gb, 1) + " GB");
+             if(millis() - lastLogTime >= 2000) {
+                 lastLogTime = millis();
+                 File f = SD.open(logFileName, FILE_APPEND);
+                 if(f) {
+                     f.print(millis()); f.print(";"); f.print(systemON); f.print(";");
+                     f.print(i); f.print(";"); f.print(u); f.print(";");
+                     f.print(p); f.print(";"); f.print(currentDac1); f.println(currentDac2);
+                     f.close();
+                 }
+             }
         }
     }
 }
