@@ -1,0 +1,41 @@
+📝 Instrukcja Użytkowania
+Podłączenie:
+
+Połącz porty A i B modułu RS485 Testera z portami A i B Głównego Regulatora.
+
+Ważne: Połącz masy (GND) obu układów (Testera i Regulatora), aby wyrównać potencjały, jeśli są zasilane z różnych źródeł.
+
+Uruchomienie:
+
+Włącz zasilanie Testera.
+
+W terminalu zobaczysz komunikat: TESTER GOTOWY.
+
+Domyślna wartość startowa to 50.00 Hz.
+
+Testowanie:
+
+Wciśnij przycisk na GPIO 19 (DÓŁ). Wartość spadnie (np. do 35.00 Hz).
+
+Obserwuj Główny Regulator – w trybie AUTO powinien wykryć spadek częstotliwości poniżej progu (np. 40Hz) i wyłączyć przekaźniki.
+
+Wciśnij przycisk na GPIO 18 (GÓRA). Wartość wzrośnie powyżej 45.00 Hz.
+
+Główny Regulator powinien automatycznie włączyć system.
+
+🔍 Rozwiązywanie Problemów (Troubleshooting)
+Problem: Regulator nie widzi Testera (Błąd RS485 / Timeout).
+
+Rozwiązanie: Zamień miejscami kable A i B. Niektóre moduły mają błędne oznaczenia.
+
+Rozwiązanie: Sprawdź, czy dioda na module RS485 mruga podczas transmisji.
+
+Rozwiązanie: Upewnij się, że GND obu ESP32 jest połączone.
+
+Problem: Brak reakcji na przyciski.
+
+Rozwiązanie: Sprawdź, czy przycisk na pewno zwiera pin do GND (Masy), a nie do 5V.
+
+Problem: Błąd kompilacji This chip is ESP32-S3, not ESP32.
+
+Rozwiązanie: Upewnij się, że w platformio.ini masz wpisane board = esp32-s3-devkitc-1.
