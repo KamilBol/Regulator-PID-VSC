@@ -1,0 +1,80 @@
+# 🛠️ Tester / Symulator Falownika E3 (Modbus RTU Slave)
+
+## 📌 Opis Projektu
+Ten projekt jest **cyfrowym bliźniakiem (Digital Twin)** falownika przemysłowego serii E3. Został stworzony, aby umożliwić bezpieczne testowanie Głównego Regulatora PID "na biurku", bez konieczności podłączania silników, wysokiego napięcia (230/400V) i fizycznego falownika.
+
+Urządzenie działa na mikrokontrolerze **ESP32-S3** i symuluje zachowanie falownika w sieci **Modbus RTU (RS485)**. Pozwala ręcznie sterować "wirtualną częstotliwością" silnika, na co Główny Regulator musi odpowiednio zareagować (np. włączając/wyłączając przekaźniki w trybie AUTO).
+
+---
+
+## 🚀 Główne Funkcje
+1.  **Symulacja Modbus Slave:** Urządzenie nasłuchuje zapytań od Mastera (Regulatora) pod adresem ID `1`.
+2.  **Rejestr Częstotliwości:** Symuluje rejestr `0x1000` (Output Frequency), zwracając wartość w skali x100 (np. `5000` = 50.00 Hz).
+3.  **Sterowanie Fizyczne:** Dwa przyciski (GÓRA/DÓŁ) pozwalają użytkownikowi zmieniać symulowaną prędkość silnika w czasie rzeczywistym.
+4.  **Logowanie UART:** Podgląd aktualnych parametrów pracy w terminalu szeregowym.
+
+---
+
+## ⚙️ Wymagania Sprzętowe
+* **Mikrokontroler:** ESP32-S3 (DevKitC-1)
+* **Komunikacja:** Moduł konwertera UART <-> RS485 (np. MAX485 lub izolowany moduł przemysłowy).
+* **Interfejs:** 2x przycisk tact-switch (zwierny).
+* **Zasilanie:** USB-C lub 5V.
+
+---
+
+## 🔌 Schemat Połączeń (Pinout)
+
+### 1. Moduł RS485
+| Pin ESP32-S3 | Pin Modułu RS485 | Funkcja |
+| :--- | :--- | :--- |
+| **GPIO 16** | **RO** (RX) | Odbiór danych z magistrali |
+| **GPIO 17** | **DI** (TX) | Nadawanie danych na magistralę |
+| **GPIO 4** | **DE** oraz **RE** | Sterowanie nadawaniem (zwarte razem) |
+| **5V / 3.3V** | **VCC** | Zasilanie modułu |
+| **GND** | **GND** | Wspólna masa (Krytyczne!) |
+
+### 2. Przyciski Sterujące
+| Pin ESP32-S3 | Element | Konfiguracja | Funkcja |
+| :--- | :--- | :--- | :--- |
+| **GPIO 18** | Przycisk 1 | Zwiera do GND | **Zwiększ Hz (+5.00)** |
+| **GPIO 19** | Przycisk 2 | Zwiera do GND | **Zmniejsz Hz (-5.00)** |
+
+> **UWAGA:** Przyciski korzystają z wewnętrznych rezystorów podciągających (`INPUT_PULLUP`). Drugą nóżkę przycisku należy podłączyć bezpośrednio do **GND**.
+
+---
+
+## 📡 Parametry Transmisji (Modbus RTU)
+Aby Główny Regulator poprawnie skomunikował się z Testerem, muszą one mieć identyczne ustawienia:
+
+* **Baud Rate:** 9600
+* **Data Bits:** 8
+* **Stop Bits:** 1
+* **Parity:** None (Brak)
+* **Protokół:** Modbus RTU (Serial 8N1)
+* **Slave ID:** 1
+* **Holding Register:** `0x1000` (4096 dec)
+
+---
+
+## 💻 Konfiguracja Programowa (PlatformIO)
+
+Projekt wykorzystuje środowisko **PlatformIO**. Poniżej znajduje się poprawna konfiguracja pliku `platformio.ini` dla ESP32-S3.
+
+**Użyta biblioteka:** `emelianov/modbus-esp8266` (Obsługuje zarówno ESP8266 jak i ESP32).
+
+```ini
+[env:esp32-s3-devkitc-1]
+platform = espressif32
+board = esp32-s3-devkitc-1
+framework = arduino
+monitor_speed = 115200
+
+; Biblioteka do obsługi Modbus RTU Slave
+lib_deps = 
+    emelianov/modbus-esp8266
+
+; Flagi wymagane dla poprawnego działania USB Serial w S3
+build_flags = 
+    -D ARDUINO_USB_MODE=1
+    -D ARDUINO_USB_CDC_ON_BOOT=1
