@@ -1,6 +1,4 @@
 💊 PIGUŁKA WIEDZY: KONDENSATOR 
-Do wklejenia na GitHuba / Dokumentacji
-
 Aby wyeliminować "cykanie" przekaźników i restarty ESP32 przy pracy z WiFi/Modbus/Ekranem na samym zasilaczu, należy wlutować kondensator buforujący.
 
 1. Parametry kondensatora:
