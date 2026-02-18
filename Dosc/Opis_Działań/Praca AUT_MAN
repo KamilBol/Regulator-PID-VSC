@@ -1,0 +1,23 @@
+Co to oznacza (Praca AUT / MAN):
+Przycisk ten (opisany jako praca id12 page0) zmienia tryb ponownego uruchamiania się regulatora po wykryciu zbyt wysokiego prądu (np. 50-60A).
+
+Tryb AUT (Automatyczny):
+Gdy prąd skoczy i regulator się wyłączy (dla bezpieczeństwa), system będzie monitorował sytuację. Gdy prąd w silniku granulatora spadnie i wróci do normy (wejdzie w bezpieczne "widełki"), regulator samoczynnie się włączy i podajniki ruszą dalej. Nie musisz nic klikać.
+
+Tryb MAN (Manualny):
+Gdy regulator wyłączy się z powodu przeciążenia, pozostanie wyłączony. Operator musi podejść do maszyny i ręcznie włączyć regulator ponownie, aby wznowić pracę podajników.
+
+Co dzieje się w kodzie po zmianie tej wartości:
+Po naciśnięciu przycisku na wyświetlaczu:
+
+ESP32 zmienia wewnętrzną zmienną (flagę trybu).
+
+Wysyła na wyświetlacz do pola tekstowego pracaautoman (id 10 na stronie 0) napis "AUT" lub "MAN".
+
+W głównej pętli programu, w sekcji obsługi bezpieczeństwa (safety), kod sprawdza tę flagę:
+
+Jeśli jest AUT -> uruchamia timer odliczający czas do automatycznego powrotu (gdy prąd jest OK).
+
+Jeśli jest MAN -> czeka na fizyczną interwencję użytkownika (wciśnięcie przycisku PID ON).
+
+To funkcja oddzielna od głównego włącznika "PID ON/OFF", który służy do przełączania między starym zadajnikiem a Twoim Regulatorem PID.
