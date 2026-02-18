@@ -21,3 +21,36 @@ MINUS (-) kondensatora (pasek na obudowie) -> do pinu GND na ESP32.
 
 3. Cel:
 Działa jak "wiadro z prądem". Gdy ESP32 włącza WiFi i przekaźniki, pobór prądu skacze. Zasilacz nie zdąży zareagować, ale kondensator odda zgromadzoną energię, utrzymując napięcie powyżej 3V i zapobiegając resetowi (Brownout).
+Treść wiadomości Gemini
+Spokojnie! To jest najczęstsza obawa osób zaczynających z elektroniką, ale zapewniam Cię w 100%: Kondensator o wyższym napięciu NIE spali Twojego ESP32.
+
+Wręcz przeciwnie – zastosowanie kondensatora na styk (np. 6.3V) byłoby ryzykowne.
+
+Oto proste wyjaśnienie, dlaczego tak jest i dlaczego musisz użyć 10V, 16V lub 25V:
+
+1. Jak to działa? (Analiza Wiadra)
+Wyobraź sobie kondensator jako wiadro na wodę, a napięcie jako ciśnienie wody.
+
+Napis na kondensatorze (np. 16V) to informacja: "To wiadro wytrzyma ciśnienie do 16 atmosfer".
+
+Twoje zasilanie (z USB lub zasilacza) daje 5V.
+
+Jeśli wlejesz wodę pod ciśnieniem 5V do wiadra, które wytrzymuje 16V – co się stanie?
+
+Nic złego! Wiadro po prostu będzie w 1/3 wypełnione ciśnieniem. Będzie pracować na luzie, bezpiecznie i długo.
+
+Kondensator nie produkuje napięcia. On tylko przyjmuje tyle, ile mu podasz. Jeśli podasz mu 5V, on naładuje się do 5V i ani grama więcej.
+
+2. Co by się stało, gdybyś dał za MAŁO?
+Gdybyś wziął kondensator na 2.5V i podłączył go do zasilania 5V:
+
+Wtedy "ciśnienie" rozsadziłoby wiadro. Kondensator by wybuchł (dosłownie "strzelił"), a elektrolit zalałby płytkę.
+
+3. Dlaczego polecam 10V, 16V lub 25V?
+Zasada inżynierska mówi: "Zawsze stosuj kondensator o napięciu 2x wyższym niż napięcie w układzie".
+
+Masz zasilanie: 5V.
+
+Bezpieczny margines: 5V x 2 = 10V.
+
+Dlatego kondensatory 10V, 16V czy 25V są idealne. Będą działać wiecznie.
