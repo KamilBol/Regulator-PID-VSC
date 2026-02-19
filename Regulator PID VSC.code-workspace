@@ -1,0 +1,12 @@
+{
+	"folders": [
+		{
+			"path": "../Regulator PID VSC"
+		},
+		{
+			"name": "Tester_E3",
+			"path": "../Regulator PID VSC/Tester_E3"
+		}
+	],
+	"settings": {}
+}
