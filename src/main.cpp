@@ -18,7 +18,7 @@
 #define PIN_RS485_TX    2
 #define PIN_RS485_DE    6
 #define PIN_RELAY_1     47
-#define PIN_RELAY_2     48
+#define PIN_RELAY_2     38 // <--- ZMIENIONO Z 48 NA BEZPIECZNY PIN 38
 #define PIN_NEXT_RX     13
 #define PIN_NEXT_TX     14
 #define PIN_DHT         20
