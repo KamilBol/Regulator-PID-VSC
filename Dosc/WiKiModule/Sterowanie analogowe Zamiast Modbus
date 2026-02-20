@@ -1,0 +1,46 @@
+Moja droga do pancernego sterowania analogowego (Zamiast Modbus)
+W pierwotnej fazie projektu planowałem sterować falownikiem Optidrive E3 poprzez protokół Modbus RTU (RS485). Po głębszej analizie i testach, zdecydowałem się zrezygnować z Modbusa na rzecz zaawansowanego, izolowanego toru analogowego. Poniżej opisuję, dlaczego podjąłem taką decyzję, co zyskałem i jak dokładnie buduję ten układ, aby był niezniszczalny w warunkach przemysłowych.
+
+Dlaczego zrezygnowałem z Modbus RTU?
+Choć Modbus wydaje się nowoczesny, w tym konkretnym zastosowaniu (sterowanie granulatorem) napotkałem na kilka ryzyk, które przeważyły:
+
+Bezpieczeństwo i stabilność (Tryb awaryjny): W przypadku sterowania cyfrowego, jeśli mój ESP32 zawiesi się lub straci łączność, falownik może zostać na ostatniej zadanej częstotliwości. Sterowanie analogowe jest bardziej przewidywalne – brak sygnału napięciowego to po prostu zero obrotów.
+
+Płynność przejęcia (Bumpless Transfer): Aby przejść z ręcznego kręcenia potencjometrem na automatykę PID bez szarpnięcia maszyną, musiałbym stale synchronizować rejestry Modbus z fizycznym położeniem potencjometru. Odczyt bezpośredniego napięcia z zadajnika jest szybszy i bardziej niezawodny.
+
+Zakłócenia (EMI): Falowniki generują potężne pole elektromagnetyczne. Ramki Modbus bywają wrażliwe na błędy sumy kontrolnej (CRC) przy słabym ekranowaniu. Odizolowany sygnał napięciowy z filtrem sprzętowym jest w tych warunkach stabilniejszy.
+
+Jak buduję "Pancerny Tor Analogowy"
+Skoro zdecydowałem się na sterowanie napięciowe, musiałem rozwiązać problem różnicy potencjałów i zakłóceń, które mogłyby usmażyć moje ESP32. Stworzyłem układ oparty na pełnej izolacji galwanicznej.
+
+1. Odczyt napięcia z zadajnika (ADS1115)
+Wykorzystuję zewnętrzny, 16-bitowy przetwornik ADS1115. Pozwala mi on precyzyjnie zmierzyć, jakie napięcie podaje operator z ręcznego zadajnika (0-10V po przejściu przez dzielnik napięcia). Dzięki temu mój system "wie", z jaką prędkością pracuje maszyna, zanim jeszcze przejmę nad nią kontrolę.
+
+2. Bariera komunikacyjna (ISO1540)
+To moja "fosa obronna". Przetwornik ADS1115 musi być połączony z linią sygnałową falownika, więc jest narażony na przepięcia. Użyłem izolatora ISO1540, który rozcina fizycznie przewody danych (I2C). Dane przelatują przez niego w formie impulsów magnetycznych/pojemnościowych – nie ma tam żadnego połączenia elektrycznego drut-w-drut między maszyną a moim procesorem.
+
+3. Odseparowane zasilanie (B0505S-1W)
+Nawet najlepsza izolacja danych nic nie da, jeśli masy (GND) będą wspólne. Dlatego do zasilania strony pomiarowej użyłem przetwornicy B0505S-1W. Ona "przepompowuje" energię z mojego zasilacza, ale tworzy całkowicie nową, niezależną masę dla części analogowej. Dzięki temu "brudny" prąd z falownika nie ma fizycznej drogi, by wrócić do ESP32.
+
+4. Konwerter 4-20mA (Opcja awaryjna)
+Wiele falowników w przemyśle pracuje w standardzie pętli prądowej 4-20mA zamiast napięciowego 0-10V. Jeśli na miejscu okaże się, że instalacja tego wymaga, przygotowałem konwerter (zielona płytka), który zamieni sygnał z mojego DACa na prądowy. To gwarantuje, że mój regulator poradzi sobie z każdą maszyną, niezależnie od jej standardu.
+
+Co może pójść nie tak i jak się zabezpieczam?
+Skoki napięcia przy przełączaniu: Nawet przy identycznym napięciu, w momencie pracy przekaźnika obwód na milisekundy zostaje przerwany. Rozwiązałem to, planując dodanie kondensatora filtrującego na wejściu falownika, który podtrzyma napięcie w trakcie "lotu" styków przekaźnika.
+
+Pętla mas: Dzięki zastosowaniu B0505S i ISO1540, całkowicie uniknąłem problemu pętli mas, który jest najczęstszą przyczyną restartów ESP32 w szafach sterowniczych.
+
+Awaria zasilania 12V: System zasilam przez skrętkę napięciem 12V, a na miejscu obniżam je dwiema przetwornicami LM2596 (jedna dla logiki, druga dla przekaźników). To eliminuje spadki napięcia na długich kablach.
+
+Plan podłączenia (Pinologia)
+Mój układ będzie połączony w następujący sposób:
+
+ESP32-S3 ↔ ISO1540 (Strona "czysta"): Zasilane z głównego 5V.
+
+ISO1540 ↔ ADS1115 (Strona "izolowana"): Zasilane z wyjścia przetwornicy B0505S.
+
+ADS1115 ↔ Zadajnik ręczny: Odczyt przez dzielnik napięcia (skalowanie 10V -> 3.3V).
+
+DAC (GP8403) ↔ Przekaźnik: Wyjście sygnału sterującego falownikiem.
+
+Taka architektura sprawia, że mój regulator PID jest nie tylko inteligentny, ale przede wszystkim pancerny i bezpieczny dla drogiej elektroniki.
