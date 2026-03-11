@@ -5,20 +5,23 @@
 #include <PZEM004Tv30.h>
 #include <EasyNextionLibrary.h>
 #include <DFRobot_GP8403.h>
+#include <Adafruit_ADS1X15.h>
 #include <PID_v1.h>
 #include <DHT.h>
-#include <ModbusMaster.h>
 
 // ================================================================
-// 1. PINOLOGIA (Hardcoded)
+// 1. PINOLOGIA
 // ================================================================
 #define PIN_PZEM_RX     4
 #define PIN_PZEM_TX     5
-#define PIN_RS485_RX    1
-#define PIN_RS485_TX    2
-#define PIN_RS485_DE    6
+
+// I2C STREFA BRUDNA (DAC + ADS1115)
+#define PIN_I2C_SDA     2
+#define PIN_I2C_SCL     1
+
 #define PIN_RELAY_1     47
-#define PIN_RELAY_2     38 // <--- ZMIENIONO Z 48 NA BEZPIECZNY PIN 38
+#define PIN_RELAY_2     38 // BEZPIECZNY PIN 38
+
 #define PIN_NEXT_RX     13
 #define PIN_NEXT_TX     14
 #define PIN_DHT         20
@@ -26,11 +29,8 @@
 #define PIN_SD_SCK      16
 #define PIN_SD_MOSI     17
 #define PIN_SD_MISO     18
-#define PIN_DAC_SDA     41
-#define PIN_DAC_SCL     40
 
-// LOGIKA PRZEKAŹNIKÓW (Dostosuj jeśli masz moduł High-Trigger)
-// Dla modułów Low-Trigger (większość): ON = LOW, OFF = HIGH
+// LOGIKA PRZEKAŹNIKÓW (Dla modułów Low-Trigger: ON = LOW, OFF = HIGH)
 #define RELAY_ON        LOW
 #define RELAY_OFF       HIGH
 
@@ -39,13 +39,14 @@
 // ================================================================
 HardwareSerial NextionSerial(1);
 HardwareSerial PzemSerial(2);
-HardwareSerial ModbusSerial(0);
 
 EasyNex myNex(NextionSerial);
 PZEM004Tv30 pzem(PzemSerial, PIN_PZEM_RX, PIN_PZEM_TX);
-DFRobot_GP8403 dac(&Wire, 0x58); // Adres 0x58 (wszystkie zworki rozwarte)
 DHT dht(PIN_DHT, DHT11);
-ModbusMaster node;
+
+// Strefa Brudna I2C
+DFRobot_GP8403 dac(&Wire, 0x58);
+Adafruit_ADS1115 ads;
 
 // PID
 double Setpoint = 5.0, Input, Output;
@@ -58,6 +59,7 @@ bool systemON = false;    // PID ON/OFF
 bool modeAUTO = true;     // TRUE = Auto-Restart, FALSE = Manual
 
 // Zmienne Pracy
+float napiecieZadajnika = 0.0; // Odczytane z maszyny
 float currentDac1 = 0.0;
 float currentDac2 = 0.0;
 String logFileName = "/log_000.csv";
@@ -74,9 +76,6 @@ bool isResetPressed = false;
 // 3. FUNKCJE POMOCNICZE
 // ================================================================
 
-void preTransmission() { digitalWrite(PIN_RS485_DE, HIGH); }
-void postTransmission() { digitalWrite(PIN_RS485_DE, LOW); }
-
 void scanI2C() {
     Serial.println("[I2C] Skanowanie magistrali...");
     byte error, address;
@@ -91,7 +90,7 @@ void scanI2C() {
             nDevices++;
         }
     }
-    if (nDevices == 0) Serial.println("[I2C] Brak urzadzen! Sprawdz piny 40/41.");
+    if (nDevices == 0) Serial.println("[I2C] Brak urzadzen! Sprawdz piny 1 i 2 oraz zasilanie izolatora.");
     else Serial.println("[I2C] Koniec skanowania.");
 }
 
@@ -103,7 +102,6 @@ void initSD() {
         return;
     }
     
-    // Szukamy wolnego pliku
     int i = 0;
     while(true) {
         logFileName = "/log_" + String(i) + ".csv";
@@ -113,8 +111,8 @@ void initSD() {
     
     File f = SD.open(logFileName, FILE_WRITE);
     if(f) {
-        f.println("Czas;PID;Prad;Nap;Moc;DAC1;DAC2");
-        f.close(); // Zamykamy od razu!
+        f.println("Czas;PID;Prad;Nap;Moc;Zadajnik;DAC1;DAC2");
+        f.close();
         Serial.println("[SD] Utworzono plik: " + logFileName);
     }
 }
@@ -127,36 +125,28 @@ void startRegulator() {
     systemON = true;
     myNex.writeStr("pidonoff.txt", "ON");
     
-    // Włączamy przekaźniki (logika odwrócona)
+    // Włączamy przekaźniki
     digitalWrite(PIN_RELAY_1, RELAY_ON);
     digitalWrite(PIN_RELAY_2, RELAY_ON);
     
-    // Testowo ustawiamy 5V na start (zanim PID ruszy)
-    currentDac1 = 5.00; 
-    currentDac2 = currentDac1 * 0.90;
-    
-    // Wyślij na DAC
+    // PŁYNNE PRZEJĘCIE (Bumpless Transfer):
+    // currentDac1 jest na bieżąco aktualizowane w pętli loop() na podstawie napięcia zadajnika.
+    // Ustawiamy od razu te same wartości, aby nie było szarpnięcia przy kliknięciu przekaźnika.
     dac.setDACOutVoltage(currentDac1 * 1000, 0);
     dac.setDACOutVoltage(currentDac2 * 1000, 1);
     
-    Serial.println("[SYS] START REGULATORA");
+    Serial.println("[SYS] START REGULATORA (Przejęcie płynne)");
 }
 
 void stopRegulator() {
     systemON = false;
     myNex.writeStr("pidonoff.txt", "OFF");
     
-    // Wyłączamy przekaźniki
+    // Wyłączamy przekaźniki - maszyna wraca pod kontrolę sprzętowego zadajnika
     digitalWrite(PIN_RELAY_1, RELAY_OFF);
     digitalWrite(PIN_RELAY_2, RELAY_OFF);
     
-    // Zerujemy DAC
-    currentDac1 = 0.00;
-    currentDac2 = 0.00;
-    dac.setDACOutVoltage(0, 0);
-    dac.setDACOutVoltage(0, 1);
-    
-    Serial.println("[SYS] STOP REGULATORA");
+    Serial.println("[SYS] STOP REGULATORA (Powrót do zadajnika ręcznego)");
 }
 
 void updateSettingsScreen() {
@@ -189,23 +179,20 @@ void handleNextionInput() {
                 byte event  = NextionSerial.read(); 
                 while (NextionSerial.available()) NextionSerial.read();
 
-                // PAGE 0
                 if (pageId == 0) {
-                    if (cmpId == 11 && event == 0x01) { // PID ON/OFF
-                        // Działa ZAWSZE, niezależnie od AUTO/MAN
+                    if (cmpId == 11 && event == 0x01) { 
                         if(systemON) stopRegulator(); else startRegulator();
                     }
-                    if (cmpId == 12 && event == 0x01) { // AUTO/MAN
+                    if (cmpId == 12 && event == 0x01) { 
                         modeAUTO = !modeAUTO;
                         myNex.writeStr("pracaautoman.txt", modeAUTO ? "AUT" : "MAN");
                     }
-                    if (cmpId == 8) { // RESET (Hold logic)
+                    if (cmpId == 8) { 
                         if (event == 0x01) { isResetPressed = true; resetPressTime = millis(); myNex.writeStr("logi0.txt", "Trzymaj 5s..."); }
                         else if (event == 0x00) { isResetPressed = false; myNex.writeStr("logi0.txt", "..."); }
                     }
                 }
                 
-                // PAGE 2 (Limity)
                 if (pageId == 2) {
                     if (event == 0x01) { activeButtonID = cmpId; isButtonHeld = true; processButtonAction(activeButtonID); buttonHoldTimer = millis() + 400; }
                     else if (event == 0x00) { activeButtonID = 0; isButtonHeld = false; }
@@ -226,7 +213,7 @@ void handleNextionInput() {
 // 6. SETUP
 // ================================================================
 void setup() {
-    // 1. ZABEZPIECZENIE PRZEKAŹNIKÓW (Stan OFF na start)
+    // 1. ZABEZPIECZENIE PRZEKAŹNIKÓW
     pinMode(PIN_RELAY_1, OUTPUT);
     pinMode(PIN_RELAY_2, OUTPUT);
     digitalWrite(PIN_RELAY_1, RELAY_OFF);
@@ -234,28 +221,31 @@ void setup() {
 
     delay(1000); 
     Serial.begin(115200);
-    Serial.println("\n--- SYSTEM V8.0 (DAC + RELAY FIX) ---");
+    Serial.println("\n--- SYSTEM V9.0 (STREFA BRUDNA ANALOG) ---");
 
-    // 2. RS485
-    pinMode(PIN_RS485_DE, OUTPUT);
-    digitalWrite(PIN_RS485_DE, LOW);
-    ModbusSerial.begin(9600, SERIAL_8N1, PIN_RS485_RX, PIN_RS485_TX);
-
-    // 3. NEXTION
+    // 2. NEXTION
     NextionSerial.begin(9600, SERIAL_8N1, PIN_NEXT_RX, PIN_NEXT_TX);
     myNex.begin(9600);
     
-    // 4. PZEM
+    // 3. PZEM
     PzemSerial.begin(9600, SERIAL_8N1, PIN_PZEM_RX, PIN_PZEM_TX);
     
-    // 5. DHT
+    // 4. DHT
     dht.begin();
 
-    // 6. DAC (I2C Fix)
-    // Najpierw odpalamy Wire na pinach 40/41
-    Wire.begin(PIN_DAC_SDA, PIN_DAC_SCL);
-    scanI2C(); // Sprawdzamy czy DAC odpowiada
+    // 5. STREFA BRUDNA I2C (DAC + ADS1115) na pinach 1 i 2
+    Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
+    scanI2C(); 
     
+    // Inicjalizacja ADS1115 (Adres domyślny 0x48)
+    ads.setGain(GAIN_TWOTHIRDS); // Odczyt do 6.144V
+    if (!ads.begin(0x48)) {
+        Serial.println("[ADS] Blad komunikacji! Sprawdz adres 0x48.");
+    } else {
+        Serial.println("[ADS] Polaczono poprawnie.");
+    }
+
+    // Inicjalizacja DAC
     if(dac.begin() != 0) {
         Serial.println("[DAC] Blad komunikacji! (Adres inny niz 0x58?)");
     } else {
@@ -264,13 +254,13 @@ void setup() {
         dac.setDACOutVoltage(0, 0);
     }
 
-    // 7. SD
+    // 6. SD
     initSD();
 
     // Domyślne stany
     myNex.writeStr("pidonoff.txt", "OFF");
     myNex.writeStr("pracaautoman.txt", "AUT");
-    stopRegulator(); // Dla pewności
+    stopRegulator();
     
     Serial.println("SYSTEM GOTOWY");
 }
@@ -284,7 +274,29 @@ void loop() {
     if (millis() - lastUpdate >= 1000) {
         lastUpdate = millis();
 
-        // Pomiary
+        // -------------------------------------------------------------
+        // ODCZYT I SKALOWANIE NAPIĘCIA Z ZADAJNIKA (Zawsze aktywny)
+        // -------------------------------------------------------------
+        int16_t adc_surowe = ads.readADC_SingleEnded(0);
+        float napiecie_na_pinie = ads.computeVolts(adc_surowe);
+        
+        // Mnożnik x2 dla dzielnika napięcia (10k + 10k)
+        napiecieZadajnika = napiecie_na_pinie * 2.0; 
+        if(napiecieZadajnika < 0.05) napiecieZadajnika = 0.0;
+        if(napiecieZadajnika > 10.0) napiecieZadajnika = 10.0;
+
+        // Jeśli system jest wyłączony, DAC po cichu naśladuje pozycję ręcznego zadajnika.
+        // Dzięki temu, gdy klikniesz start, DAC jest już na idealnym napięciu.
+        if (!systemON) {
+            currentDac1 = napiecieZadajnika;
+            currentDac2 = currentDac1 * 0.90; // Zachowana Twoja stara logika
+            dac.setDACOutVoltage(currentDac1 * 1000, 0);
+            dac.setDACOutVoltage(currentDac2 * 1000, 1);
+        }
+
+        // -------------------------------------------------------------
+        // POMIARY Z CZUJNIKÓW
+        // -------------------------------------------------------------
         float u = pzem.voltage();
         float i = pzem.current();
         float p = pzem.power();
@@ -304,11 +316,10 @@ void loop() {
             sprintf(buf, "%.0f Var", q); myNex.writeStr("mocbie.txt", buf);
             sprintf(buf, "%.2f", pf); myNex.writeStr("wspmoc.txt", buf);
             
-            // Ping w logach że żyje
-            Serial.printf("[PZEM] OK | I=%.3f A\n", i);
+            Serial.printf("[PZEM] OK | I=%.3f A | Zadajnik=%.2f V\n", i, napiecieZadajnika);
         } else {
             myNex.writeStr("napgr.txt", "ERR");
-            Serial.println("[PZEM] Brak komunikacji!");
+            Serial.printf("[PZEM] Brak komunikacji! | Zadajnik=%.2f V\n", napiecieZadajnika);
         }
 
         // EKRAN: DHT
@@ -331,8 +342,6 @@ void loop() {
              float gb = SD.totalBytes() / (1024.0*1024.0*1024.0);
              myNex.writeStr("sd.txt", String(gb, 1) + " GB");
              
-             // Zapis do logu (tylko jak system ON, żeby nie śmiecić?)
-             // Zmieniam na: ZAWSZE co 2s, żebyś widział historię
              if(millis() - lastLogTime >= 2000) {
                  lastLogTime = millis();
                  File f = SD.open(logFileName, FILE_APPEND);
@@ -342,10 +351,10 @@ void loop() {
                      f.print(i); f.print(";");
                      f.print(u); f.print(";");
                      f.print(p); f.print(";");
+                     f.print(napiecieZadajnika); f.print(";");
                      f.print(currentDac1); f.print(";");
                      f.println(currentDac2);
-                     f.close(); // Zamykamy od razu!
-                     Serial.println("[SD] Log zapisany.");
+                     f.close();
                  }
              }
         } else {
