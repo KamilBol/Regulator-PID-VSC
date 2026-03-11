@@ -30,6 +30,9 @@
 #define PIN_SD_MOSI     17
 #define PIN_SD_MISO     18
 
+// --- NOWY PIN: POTENCJOMETR DO SYMULACJI PZEM ---
+#define PIN_POT_SYMULACJA 3 // Wolny pin ADC na ESP32-S3 (odczyt 0-3.3V)
+
 #define RELAY_ON        LOW
 #define RELAY_OFF       HIGH
 
@@ -77,7 +80,7 @@ bool isResetPressed = false;
 const float WSPOLCZYNNIK_DZIELNIKA = 1.982;
 float filtr_waga = 0.15;
 
-// --- ZMIENNE DO SYMULACJI (MAGIA DHT -> PZEM) ---
+// --- ZMIENNE DO SYMULACJI (MAGIA POTENCJOMETR -> PZEM) ---
 const int BUTTON_PIN = 0;
 bool trybTestowy = false;
 unsigned long buttonPressTime_Magia = 0; 
@@ -133,7 +136,7 @@ void startRegulator() {
     systemON = true;                      
     myNex.writeStr("pidonoff.txt", "ON"); 
 
-    // --- POPRAWKA 1: WYRÓWNANIE Z ZADAJNIKIEM PRZED WŁĄCZENIEM ---
+    // --- WYRÓWNANIE Z ZADAJNIKIEM PRZED WŁĄCZENIEM ---
     myPID.SetMode(MANUAL);          // Chwilowo usypiamy PID
     Output = napiecieZadajnika;     // Pobieramy aktualny stan maszyny
     currentDac1 = Output;
@@ -249,10 +252,11 @@ void setup() {
     digitalWrite(PIN_RELAY_2, RELAY_OFF);
 
     pinMode(BUTTON_PIN, INPUT_PULLUP);
+    pinMode(PIN_POT_SYMULACJA, INPUT); // PIN potencjometru jako wejście
 
     delay(1000); 
     Serial.begin(115200); 
-    Serial.println("\n--- SYSTEM V9.3 (Sync DAC + Smooth Window PID) ---");
+    Serial.println("\n--- SYSTEM V9.5 (Potencjometr 0-50A + Window PID) ---");
 
     memory.begin("regulator", false); 
     minLimit = memory.getFloat("minLim", 10.0); 
@@ -310,7 +314,7 @@ void loop() {
         isButtonPressed_Magia = false;
         if (millis() - buttonPressTime_Magia >= LONG_PRESS_TIME) {
             trybTestowy = !trybTestowy; 
-            Serial.print("[MAGIA] Tryb testowy (DHT -> PZEM) to teraz: ");
+            Serial.print("[MAGIA] Tryb testowy (POTENCJOMETR -> PZEM) to teraz: ");
             Serial.println(trybTestowy ? "ON" : "OFF");
         }
     }
@@ -364,17 +368,15 @@ void loop() {
         if (isnan(p)) p = 0.0;
         if (isnan(pf)) pf = 0.0;
 
-        if (trybTestowy && !isnan(t)) {
-            if (t <= 20.0) {
-                i = 20.0;
-            } else if (t >= 32.0) {
-                i = 50.0;
-            } else {
-                i = 20.0 + ((t - 20.0) * 2.5);
-            }
+        // --- PROTEZA MAGII: NADPISYWANIE PRĄDU POTENCJOMETREM ---
+        if (trybTestowy) {
+            int pot_raw = analogRead(PIN_POT_SYMULACJA); // Odczyt sprzętowy 0-4095
+            // Przeliczamy wartość cyfrową płynnie na Ampery od 0.000A do 50.000A
+            i = (pot_raw / 4095.0) * 50.0; 
         }
+        // --------------------------------------------------------
 
-        // --- POPRAWKA 2: INTELIGENTNA STREFA BEZPIECZNA (Wczesne reagowanie) ---
+        // --- INTELIGENTNA STREFA BEZPIECZNA (Wczesne reagowanie) ---
         // Wyliczamy strefę wczesnego reagowania (np. 15% z zakresu pomiędzy Min i Max)
         float margines = (maxLimit - minLimit) * 0.15; 
 
