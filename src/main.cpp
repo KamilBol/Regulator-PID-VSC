@@ -12,6 +12,8 @@
 #include <PID_v1.h>
 #include <DHT.h>
 #include <Preferences.h>
+#include <WiFi.h>              
+#include <WebServer.h>         
 
 // ================================================================
 // PINOLOGIA
@@ -29,7 +31,10 @@
 #define PIN_SD_SCK      16
 #define PIN_SD_MOSI     17
 #define PIN_SD_MISO     18
-#define PIN_POT_SYMULACJA 3 // Potencjometr symulacji 0-3.3V (ADC)
+#define PIN_POT_SYMULACJA 3 
+
+// --- NOWY PIN: DIODA SYGNALIZACYJNA LED ---
+#define PIN_LED 2 
 
 #define RELAY_ON        LOW
 #define RELAY_OFF       HIGH
@@ -46,14 +51,17 @@ DFRobot_GP8403 dac(&Wire, 0x58);
 Adafruit_ADS1115 ads;
 Preferences memory;
 
+WebServer server(80); 
+
 // --- PARAMETRY PID ---
 double Setpoint;
 double Input;
 double Output;
-PID myPID(&Input, &Output, &Setpoint, 0.5, 0.1, 0.15, DIRECT);
+double Kp = 0.5, Ki = 0.1, Kd = 0.15; 
+PID myPID(&Input, &Output, &Setpoint, Kp, Ki, Kd, DIRECT);
 
 // --- TWARDE LIMITY MASZYNY ---
-const float MIN_DAC_VOLTAGE = 3.5; // 17.5 Hz z 50 Hz = 3.5V (Podłoga!)
+const float MIN_DAC_VOLTAGE = 3.5; // 17.5 Hz
 const float MAX_DAC_VOLTAGE = 10.0;
 
 // ================================================================
@@ -72,7 +80,7 @@ float currentDac2 = 0.0;
 unsigned long lastUpdate = 0;
 unsigned long lastFastUpdate = 0;
 unsigned long lastPIDTime = 0;
-unsigned long lastAITime = 0;     // Zegar dla sztucznej inteligencji
+unsigned long lastAITime = 0;     
 unsigned long resetPressTime = 0;
 bool isResetPressed = false;
 
@@ -81,19 +89,55 @@ float filtr_waga = 0.15;
 
 const int BUTTON_PIN = 0;
 bool trybTestowy = false;
-unsigned long buttonPressTime_Magia = 0; 
-bool isButtonPressed_Magia = false;
-const unsigned long LONG_PRESS_TIME = 3000;
-
 float current_Amps = 0.0;
-
-// Zmienne do analizy "AI"
 float ai_sumAmps = 0.0;
 int ai_samples = 0;
 
+// Zmienne do obsługi WiFi
+bool isWifiAPActive = false;
+
+// ULEPSZONE ZMIENNE PRZYCISKU
+unsigned long buttonPressTime = 0; 
+unsigned long lastClickTime = 0;
+int clickCount = 0;
+bool buttonWasPressed = false;
+const unsigned long CLICK_TIMEOUT = 800;    
+const unsigned long LONG_PRESS_TIME = 3000; 
+
+// Zmienne do płynnej sygnalizacji LED (NON-BLOCKING)
+unsigned long ledTimer = 0;
+int ledState = LOW;
+int blinkCount = 0;
+int blinkMax = 0;
+int blinkDuration = 100; 
+
 // ================================================================
-// FUNKCJE POMOCNICZE
+// FUNKCJE POMOCNICZE I SYGNALIZACYJNE
 // ================================================================
+void triggerBlink(int times, int duration) {
+    blinkMax = times * 2; 
+    blinkCount = 0;
+    blinkDuration = duration;
+    ledState = HIGH;
+    digitalWrite(PIN_LED, ledState);
+    ledTimer = millis();
+    blinkCount++;
+}
+
+void handleLED() {
+    if (blinkCount > 0 && blinkCount < blinkMax) {
+        if (millis() - ledTimer >= blinkDuration) {
+            ledTimer = millis();
+            ledState = !ledState;
+            digitalWrite(PIN_LED, ledState);
+            blinkCount++;
+        }
+    } else if (blinkCount >= blinkMax) {
+        digitalWrite(PIN_LED, LOW); 
+        blinkCount = 0;
+    }
+}
+
 void scanI2C() {
     Serial.println("[I2C] Skanowanie magistrali...");
     byte error, address;
@@ -102,7 +146,7 @@ void scanI2C() {
         Wire.beginTransmission(address); 
         error = Wire.endTransmission();  
         if (error == 0) {
-            Serial.print("[I2C] Znaleziono urzadzenie pod adresem: 0x");
+            Serial.print("[I2C] Znaleziono: 0x");
             if (address<16) Serial.print("0"); 
             Serial.println(address,HEX);       
             nDevices++;                        
@@ -118,7 +162,6 @@ void initSD() {
         myNex.writeStr("sd.txt", "ERR"); 
         return; 
     }
-    // Zapisujemy nagłówek dla logów "AI"
     File f = SD.open("/AI_LOG.txt", FILE_APPEND); 
     if(f) {
         f.println("=== START SYSTEMU - ANALIZATOR TRENDOW ==="); 
@@ -128,36 +171,194 @@ void initSD() {
 }
 
 // ================================================================
+// STRONY WWW (HTML + CSS + JS)
+// ================================================================
+const char INDEX_HTML[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Regulator PID - Panel</title>
+  <style>
+    body { background-color: #121212; color: #ffffff; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; text-align: center; margin: 0; padding: 10px; }
+    h1 { color: #00bcd4; font-size: 24px; }
+    .card { background-color: #1e1e1e; border-radius: 12px; padding: 20px; margin: 15px auto; max-width: 450px; box-shadow: 0 4px 8px rgba(0,0,0,0.3); }
+    .data-row { display: flex; justify-content: space-between; font-size: 18px; margin-bottom: 10px; border-bottom: 1px solid #333; padding-bottom: 5px;}
+    .data-val { font-weight: bold; color: #4caf50; }
+    label { display: block; text-align: left; font-size: 14px; color: #aaa; margin-top: 15px; }
+    input[type="number"] { width: 100%; padding: 12px; margin-top: 5px; background: #2a2a2a; border: 1px solid #444; color: white; border-radius: 6px; font-size: 16px; box-sizing: border-box;}
+    button { background-color: #00bcd4; color: #000; border: none; padding: 15px 20px; font-size: 18px; font-weight: bold; border-radius: 8px; cursor: pointer; width: 100%; margin-top: 20px; }
+    button:hover { background-color: #0097a7; }
+    .btn-danger { background-color: #f44336; color: white; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <h1>🛠️ Panel Serwisowy Granulatora</h1>
+  
+  <div class="card">
+    <div class="data-row"><span>Prąd Maszyny:</span> <span class="data-val" id="amp">-- A</span></div>
+    <div class="data-row"><span>Limit (Max):</span> <span class="data-val" id="maxL">-- A</span></div>
+    <div class="data-row"><span>Cel PID (Setpoint):</span> <span class="data-val" id="setp">-- A</span></div>
+    <div class="data-row" style="border:none;"><span>Wyjście DAC (Falownik):</span> <span class="data-val" style="color:#ff9800;" id="dac">-- V</span></div>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-top:0; border-bottom: 1px solid #333; padding-bottom:10px;">Strojenie Algorytmu PID</h3>
+    <form action="/update_pid" method="POST">
+      <label><b>P (Proporcjonalny)</b> - Siła natychmiastowej reakcji na błąd.</label>
+      <input type="number" step="0.01" name="kp" id="kp" required>
+      
+      <label><b>I (Całkujący)</b> - Wyrównywanie w czasie do punktu docelowego.</label>
+      <input type="number" step="0.01" name="ki" id="ki" required>
+      
+      <label><b>D (Różniczkujący)</b> - Przewidywanie nagłych skoków (Amortyzator).</label>
+      <input type="number" step="0.01" name="kd" id="kd" required>
+      
+      <button type="submit">💾 ZAPISZ PARAMETRY</button>
+    </form>
+  </div>
+
+  <div class="card" style="background: transparent; box-shadow: none;">
+    <button class="btn-danger" onclick="window.location.href='/ota'">📥 PRZEJDŹ DO AKTUALIZACJI (OTA)</button>
+  </div>
+
+  <script>
+    setInterval(function() {
+      fetch('/api/data').then(response => response.json()).then(data => {
+        document.getElementById('amp').innerText = data.amp + " A";
+        document.getElementById('maxL').innerText = data.maxL + " A";
+        document.getElementById('setp').innerText = data.setp + " A";
+        document.getElementById('dac').innerText = data.dac + " V";
+        
+        if(!document.getElementById('kp').value) document.getElementById('kp').value = data.kp;
+        if(!document.getElementById('ki').value) document.getElementById('ki').value = data.ki;
+        if(!document.getElementById('kd').value) document.getElementById('kd').value = data.kd;
+      });
+    }, 1000);
+  </script>
+</body>
+</html>
+)rawliteral";
+
+const char OTA_HTML[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Aktualizacja OTA</title>
+  <style>
+    body { background-color: #121212; color: #ffffff; font-family: sans-serif; text-align: center; padding: 20px; }
+    .card { background-color: #1e1e1e; border-radius: 12px; padding: 30px; margin: 20px auto; max-width: 400px; }
+    button { background-color: #4caf50; color: #fff; border: none; padding: 15px; width: 100%; font-size: 16px; border-radius: 8px; margin-top:20px;}
+    .back { background-color: #555; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Menedżer Aktualizacji (OTA)</h2>
+    <p style="color:#aaa;">Miejsce na przyszla implementacje zrzutu pliku .bin.</p>
+    <br><br>
+    <button disabled style="background:#333; color:#666;">Wybierz plik .bin (Wkrotce)</button>
+    <button class="back" onclick="window.location.href='/'">Powrót do panelu</button>
+  </div>
+</body>
+</html>
+)rawliteral";
+
+// ================================================================
+// FUNKCJE SERWERA WWW
+// ================================================================
+void handleRoot() { server.send(200, "text/html", INDEX_HTML); }
+void handleOTA() { server.send(200, "text/html", OTA_HTML); }
+
+void handleApiData() {
+    String json = "{";
+    json += "\"amp\":\"" + String(current_Amps, 2) + "\",";
+    json += "\"maxL\":\"" + String(maxLimit, 1) + "\",";
+    json += "\"setp\":\"" + String(Setpoint, 2) + "\",";
+    json += "\"dac\":\"" + String(Output, 2) + "\",";
+    json += "\"kp\":\"" + String(Kp, 3) + "\",";
+    json += "\"ki\":\"" + String(Ki, 3) + "\",";
+    json += "\"kd\":\"" + String(Kd, 3) + "\"";
+    json += "}";
+    server.send(200, "application/json", json);
+}
+
+void handleUpdatePID() {
+    if (server.hasArg("kp") && server.hasArg("ki") && server.hasArg("kd")) {
+        Kp = server.arg("kp").toFloat();
+        Ki = server.arg("ki").toFloat();
+        Kd = server.arg("kd").toFloat();
+        
+        memory.putFloat("kp", Kp);
+        memory.putFloat("ki", Ki);
+        memory.putFloat("kd", Kd);
+        
+        myPID.SetTunings(Kp, Ki, Kd);
+        
+        Serial.printf("[WiFi] Zmieniono parametry PID: P=%.3f, I=%.3f, D=%.3f\n", Kp, Ki, Kd);
+        triggerBlink(1, 1000); // 1 sekunda sygnalizacji
+    }
+    server.sendHeader("Location", "/");
+    server.send(303); 
+}
+
+void toggleWiFi() {
+    if (!isWifiAPActive) {
+        IPAddress local_ip(192, 168, 5, 1);
+        IPAddress gateway(192, 168, 5, 1);
+        IPAddress subnet(255, 255, 255, 0);
+        WiFi.softAPConfig(local_ip, gateway, subnet);
+        
+        WiFi.softAP("RegulatorPID", "regpid");
+        server.begin();
+        isWifiAPActive = true;
+        
+        Serial.println("\n=======================================");
+        Serial.println("[WIFI] SIEC UTWORZONA!");
+        Serial.println("[WIFI] Nazwa: RegulatorPID");
+        Serial.println("[WIFI] Haslo: regpid");
+        Serial.println("[WIFI] Adres w przegladarce: 192.168.5.1");
+        Serial.println("=======================================\n");
+
+        triggerBlink(3, 100); // 3 migniecia = wlaczono
+    } else {
+        server.stop();
+        WiFi.softAPdisconnect(true);
+        isWifiAPActive = false;
+        Serial.println("\n[WIFI] Siec WYLACZONA.\n");
+        
+        triggerBlink(1, 500); // 1 dlugie = wylaczono
+    }
+}
+
+void onStationConnected(WiFiEvent_t event, WiFiEventInfo_t info) {
+    Serial.println("\n[WIFI] Nowe urzadzenie (Telefon) polaczone z maszyna!");
+    triggerBlink(2, 200); 
+}
+
+// ================================================================
 // LOGIKA STEROWANIA SYSTEMEM
 // ================================================================
 void startRegulator() {
     systemON = true;                      
     trippedByOverload = false; 
     myNex.writeStr("pidonoff.txt", "ON"); 
-
     myPID.SetMode(MANUAL);          
     Output = napiecieZadajnika;     
-
-    // Zabezpieczenie miękkiego startu - jeśli zadajnik ma mniej niż 17.5Hz (3.5V), podbijamy
-    if (Output < MIN_DAC_VOLTAGE) {
-        Output = MIN_DAC_VOLTAGE;
-        Serial.println("[SYS] Zadajnik mial za malo! Wymuszam 17.5Hz (3.5V) dla plynnego startu.");
-    }
-
+    if (Output < MIN_DAC_VOLTAGE) Output = MIN_DAC_VOLTAGE;
     currentDac1 = Output;
     currentDac2 = currentDac1 * 0.90;
-
     uint16_t mv_dac1 = (currentDac1 <= 10.0) ? (currentDac1 * 1000) : 10000;
     uint16_t mv_dac2 = (currentDac2 <= 10.0) ? (currentDac2 * 1000) : 10000;
     dac.setDACOutVoltage(mv_dac1, 0); 
     dac.setDACOutVoltage(mv_dac2, 1);
-    
     delay(50); 
     digitalWrite(PIN_RELAY_1, RELAY_ON);  
     digitalWrite(PIN_RELAY_2, RELAY_ON);  
-
     myPID.SetMode(AUTOMATIC);       
-    Serial.println("[SYS] START REGULATORA (Przejeto miekko)");
 }
 
 void stopRegulator() {
@@ -165,7 +366,6 @@ void stopRegulator() {
     myNex.writeStr("pidonoff.txt", "OFF"); 
     digitalWrite(PIN_RELAY_1, RELAY_OFF);  
     digitalWrite(PIN_RELAY_2, RELAY_OFF);  
-    Serial.println("[SYS] STOP REGULATORA (Rozlaczono Przekazniki)");
 }
 
 void updateSettingsScreen() {
@@ -178,14 +378,13 @@ void processButtonAction(int id) {
     if (id == 2) { minLimit -= 0.1; if(minLimit < 0) minLimit = 0; }
     if (id == 3) { maxLimit += 0.1; if(maxLimit > 100) maxLimit = 100; }
     if (id == 4) { maxLimit -= 0.1; if(maxLimit < minLimit) maxLimit = minLimit; }
-    
     updateSettingsScreen();
     memory.putFloat("minLim", minLimit);
     memory.putFloat("maxLim", maxLimit);
 }
 
 // ================================================================
-// PARSER DOTYKU
+// PARSER DOTYKU EKRANU
 // ================================================================
 int activeButtonID = 0;          
 unsigned long buttonHoldTimer = 0; 
@@ -208,32 +407,39 @@ void handleNextionInput() {
                     }
                     if (cmpId == 12 && event == 0x01) { 
                         modeAUTO = !modeAUTO; 
-                        myNex.writeStr("pracaautoman.txt", modeAUTO ? "AUT" : "MAN");
+                        myNex.writeStr("pracaautoman.txt", modeAUTO ? "AUT" : "MAN"); 
                     }
                     if (cmpId == 8) { 
                         if (event == 0x01) { isResetPressed = true; resetPressTime = millis(); myNex.writeStr("logi0.txt", "Trzymaj 5s..."); }
                         else if (event == 0x00) { isResetPressed = false; myNex.writeStr("logi0.txt", "..."); }
                     }
                 }
+                
                 if (pageId == 2) {
                     if (event == 0x01) { 
-                        activeButtonID = cmpId; isButtonHeld = true; 
+                        activeButtonID = cmpId; 
+                        isButtonHeld = true; 
                         processButtonAction(activeButtonID); 
-                        buttonHoldTimer = millis() + 400;    
-                    } else if (event == 0x00) { 
-                        activeButtonID = 0; isButtonHeld = false; 
+                        buttonHoldTimer = millis() + 400; 
+                    }
+                    else if (event == 0x00) { 
+                        activeButtonID = 0; 
+                        isButtonHeld = false; 
                     }
                 }
             }
         }
     }
+    
     if (isButtonHeld && activeButtonID > 0 && millis() > buttonHoldTimer) {
-        processButtonAction(activeButtonID);
+        processButtonAction(activeButtonID); 
         buttonHoldTimer = millis() + 100; 
     }
+    
     if (isResetPressed && (millis() - resetPressTime > 5000)) {
         myNex.writeStr("logi0.txt", "RESTART!"); 
-        delay(500); ESP.restart(); 
+        delay(500); 
+        ESP.restart(); 
     }
 }
 
@@ -245,26 +451,38 @@ void setup() {
     pinMode(PIN_RELAY_2, OUTPUT);
     digitalWrite(PIN_RELAY_1, RELAY_OFF); 
     digitalWrite(PIN_RELAY_2, RELAY_OFF);
-
+    
     pinMode(BUTTON_PIN, INPUT_PULLUP);
     pinMode(PIN_POT_SYMULACJA, INPUT); 
+    pinMode(PIN_LED, OUTPUT); 
+    digitalWrite(PIN_LED, LOW);
 
-    delay(1000); 
+    // Dajemy czas na zainicjowanie wirtualnego portu USB COM 
+    delay(2000); 
     Serial.begin(115200); 
-    Serial.println("\n--- SYSTEM V9.7 (Min 17.5Hz + AI Trend + Serial Log) ---");
-    Serial.println("Format Danych (wklej do Excela): Czas_ms;SystemON;Auto;Awaria;Prad_A;Nap_V;Moc_W;Zadajnik_V;MinLim;MaxLim;Cel_PID;Wyjscie_PID;DAC1;DAC2");
+    Serial.setTxTimeoutMs(0); 
+    Serial.println("\n\n--- SYSTEM V11.0 (PRO WIFI + LED Feedback) ---");
+
+    WiFi.onEvent(onStationConnected, ARDUINO_EVENT_WIFI_AP_STACONNECTED);
 
     memory.begin("regulator", false); 
     minLimit = memory.getFloat("minLim", 10.0); 
     maxLimit = memory.getFloat("maxLim", 40.0); 
+    Kp = memory.getFloat("kp", 0.5);
+    Ki = memory.getFloat("ki", 0.1);
+    Kd = memory.getFloat("kd", 0.15);
+    myPID.SetTunings(Kp, Ki, Kd); 
+
+    server.on("/", HTTP_GET, handleRoot);
+    server.on("/api/data", HTTP_GET, handleApiData);
+    server.on("/update_pid", HTTP_POST, handleUpdatePID);
+    server.on("/ota", HTTP_GET, handleOTA);
 
     NextionSerial.begin(9600, SERIAL_8N1, PIN_NEXT_RX, PIN_NEXT_TX);
     myNex.begin(9600);
     PzemSerial.begin(9600, SERIAL_8N1, PIN_PZEM_RX, PIN_PZEM_TX);
     dht.begin();
     Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL); 
-    scanI2C();                            
-    
     ads.setGain(GAIN_TWOTHIRDS); 
     ads.begin(0x48);
 
@@ -273,7 +491,7 @@ void setup() {
         dac.setDACOutVoltage(0, 0);              
         dac.setDACOutVoltage(0, 1);              
     }
-
+    
     initSD();
     updateSettingsScreen();
     myNex.writeStr("pidonoff.txt", "OFF");
@@ -281,31 +499,51 @@ void setup() {
     stopRegulator(); 
     
     myPID.SetMode(AUTOMATIC);           
-    // TWARDE OGRANICZENIE: Nie wolno zwalniać poniżej 3.5V (17.5 Hz)!
     myPID.SetOutputLimits(MIN_DAC_VOLTAGE, MAX_DAC_VOLTAGE);   
     myPID.SetSampleTime(200); 
     
-    Serial.println("SYSTEM GOTOWY");
+    Serial.println("SYSTEM GOTOWY - Odpal Monitor Szeregowy!");
+    triggerBlink(2, 500); 
 }
 
 // ================================================================
 // GŁÓWNA PĘTLA PROGRAMU
 // ================================================================
 void loop() {
-    handleNextionInput();
+    handleLED(); 
 
-    // --- MAGIA (POTENCJOMETR ON/OFF) ---
+    if (isWifiAPActive) {
+        server.handleClient();
+    }
+
+    handleNextionInput(); 
+
+    // --- ULEPSZONY MULTI-KLIK PRZYCISKU BOOT ---
     int buttonState = digitalRead(BUTTON_PIN);
-    if (buttonState == LOW && !isButtonPressed_Magia) {
-        buttonPressTime_Magia = millis();
-        isButtonPressed_Magia = true;
-    } else if (buttonState == HIGH && isButtonPressed_Magia) {
-        isButtonPressed_Magia = false;
-        if (millis() - buttonPressTime_Magia >= LONG_PRESS_TIME) {
+    if (buttonState == LOW && !buttonWasPressed) {
+        buttonPressTime = millis();
+        buttonWasPressed = true;
+    } else if (buttonState == HIGH && buttonWasPressed) {
+        buttonWasPressed = false;
+        unsigned long pressDuration = millis() - buttonPressTime;
+
+        if (pressDuration >= LONG_PRESS_TIME) {
             trybTestowy = !trybTestowy; 
-            Serial.print("[MAGIA] Potencjometr -> PZEM: ");
+            Serial.print("\n[MAGIA] Potencjometr -> PZEM: ");
             Serial.println(trybTestowy ? "ON" : "OFF");
+            triggerBlink(8, 50); 
+            clickCount = 0; 
+        } else if (pressDuration > 20) { 
+            clickCount++;
+            lastClickTime = millis();
         }
+    }
+
+    if (clickCount > 0 && (millis() - lastClickTime) > CLICK_TIMEOUT) {
+        if (clickCount >= 3) { 
+            toggleWiFi();
+        }
+        clickCount = 0; 
     }
 
     // --- SZYBKA PĘTLA (50ms - Napięcia) ---
@@ -314,7 +552,6 @@ void loop() {
 
         int16_t adc_surowe = ads.readADC_SingleEnded(0); 
         float napiecie_na_pinie = ads.computeVolts(adc_surowe); 
-        
         float aktualny_odczyt = napiecie_na_pinie * WSPOLCZYNNIK_DZIELNIKA; 
         if(aktualny_odczyt < 0.05) aktualny_odczyt = 0.0;
         if(aktualny_odczyt > 10.5) aktualny_odczyt = 10.5;
@@ -329,46 +566,34 @@ void loop() {
             currentDac1 = napiecieZadajnika;
             currentDac2 = currentDac1 * 0.90; 
         } else {
-            if (isnan(Output)) Output = MIN_DAC_VOLTAGE; // Bezpieczeństwo
+            if (isnan(Output)) Output = MIN_DAC_VOLTAGE; 
             currentDac1 = Output;             
             currentDac2 = currentDac1 * 0.90; 
         }
 
         uint16_t mv_dac1 = (currentDac1 <= 10.0) ? (currentDac1 * 1000) : 10000;
         uint16_t mv_dac2 = (currentDac2 <= 10.0) ? (currentDac2 * 1000) : 10000;
-
         dac.setDACOutVoltage(mv_dac1, 0); 
         dac.setDACOutVoltage(mv_dac2, 1);
     }
 
-    // --- PĘTLA PID I KONTROLI AWARYJNEJ (200ms) ---
+    // --- PĘTLA PID (200ms) ---
     if (millis() - lastPIDTime >= 200) {
         lastPIDTime = millis();
-
         float i = pzem.current();
         if (isnan(i)) i = 0.0;
-
         if (trybTestowy) {
             int pot_raw = analogRead(PIN_POT_SYMULACJA); 
             i = (pot_raw / 4095.0) * 50.0; 
         }
-        
         current_Amps = i; 
-
-        // Zbieranie danych dla sztucznej inteligencji
-        if (systemON) {
-            ai_sumAmps += current_Amps;
-            ai_samples++;
-        }
-
-        // 1. ZABEZPIECZENIE ABSOLUTNE (Odcięcie + 7A)
+        
         if (systemON && current_Amps >= (maxLimit + 7.0)) {
             Serial.println("[ALARM] Przekroczono limit +7A! Awaryjne rozlaczenie!");
             stopRegulator();
             trippedByOverload = true;
         }
 
-        // 2. LOGIKA POWROTU W AUTO
         if (!systemON && trippedByOverload && modeAUTO) {
             if (current_Amps <= (minLimit + 2.0)) {
                 Serial.println("[AUTO] Prad wrocil do normy. Odpalam maszyne ponownie.");
@@ -376,47 +601,19 @@ void loop() {
             }
         }
 
-        // 3. OBLICZENIA PID: Zawsze dążymy do maksymalnego obciążenia
         if (systemON) {
-            // PID chce zawsze utrzymać maszynę tuż pod limitem MAX (dajemy 0.5A marginesu oddechu)
             Setpoint = maxLimit - 0.5; 
             Input = current_Amps;         
             myPID.Compute();   
         }
     }
 
-    // --- SZTUCZNA INTELIGENCJA NA SD (co 15 sekund) ---
-    if (millis() - lastAITime >= 15000) {
-        lastAITime = millis();
-        if (systemON && ai_samples > 0) {
-            float avg_Amps = ai_sumAmps / ai_samples;
-            String wniosek = "";
-            
-            if (avg_Amps < (maxLimit - 10.0)) wniosek = "Maszyna mocno niedociazona. Sugerowane podniesienie MinLimit.";
-            else if (avg_Amps < (maxLimit - 3.0)) wniosek = "Praca stabilna, ale mozna zwiekszyc posuw.";
-            else wniosek = "Praca na pelnych obrotach. Parametry optymalne.";
-
-            // Zapisz wniosek na SD
-            if(SD.cardType() != CARD_NONE) {
-                File f = SD.open("/AI_LOG.txt", FILE_APPEND);
-                if(f) {
-                    f.printf("Czas: %lu ms | Sredni prad: %.1f A | Cel: %.1f A | WNIOSEK: %s\n", millis(), avg_Amps, maxLimit, wniosek.c_str());
-                    f.close();
-                }
-            }
-            ai_sumAmps = 0.0; ai_samples = 0; // Reset próbek
-        }
-    }
-
     // --- WOLNA PĘTLA EKRANU I SERIAL LOGGERA (1000ms) ---
     if (millis() - lastUpdate >= 1000) {
         lastUpdate = millis(); 
-
         float u = pzem.voltage();
         float p = pzem.power();
         float pf = pzem.pf();
-        float t = dht.readTemperature();
-        float h = dht.readHumidity();
 
         if (isnan(u)) u = 0.0;
         if (isnan(p)) p = 0.0;
@@ -425,35 +622,18 @@ void loop() {
         if(!isnan(u) || trybTestowy) { 
             float s = u * current_Amps; 
             float q = (s > p) ? sqrt(s*s - p*p) : 0; 
-            
             char buf[16]; 
             sprintf(buf, "%.3f A", current_Amps); 
             myNex.writeStr("granampery.txt", buf); myNex.writeStr("natgr.txt", buf);
             sprintf(buf, "%.1f V", u); myNex.writeStr("napgr.txt", buf);
             sprintf(buf, "%.0f W", p); myNex.writeStr("mocczy.txt", buf);
-            sprintf(buf, "%.0f VA", s); myNex.writeStr("mocpoz.txt", buf);
-            sprintf(buf, "%.0f Var", q); myNex.writeStr("mocbie.txt", buf);
-            sprintf(buf, "%.2f", pf); myNex.writeStr("wspmoc.txt", buf);
-        }
-
-        if(!isnan(t)) { 
-            myNex.writeStr("temperatura.txt", String(t, 1));
-            myNex.writeStr("wilgotnosc.txt", String(h, 0));
         }
 
         char dacBuf[10];
         sprintf(dacBuf, "%.2f V", currentDac1); myNex.writeStr("pod1.txt", dacBuf); myNex.writeStr("dac1.txt", dacBuf);
         sprintf(dacBuf, "%.2f V", currentDac2); myNex.writeStr("pod2.txt", dacBuf); myNex.writeStr("dac2.txt", dacBuf);
 
-        if(SD.cardType() != CARD_NONE) { 
-             float gb = SD.totalBytes() / (1024.0*1024.0*1024.0); 
-             myNex.writeStr("sd.txt", String(gb, 1) + " GB"); 
-        } else {
-            myNex.writeStr("sd.txt", "NO SD"); 
-        }
-
-        // --- ZAPIS CSV BEZPOŚREDNIO DO PORTU SZEREGOWEGO (Zamiast na SD) ---
-        // Kopiujesz te linie i masz gotowego Excela!
+        // ZAPIS CSV BEZPOŚREDNIO DO PORTU SZEREGOWEGO
         Serial.printf("%lu;%d;%d;%d;%.3f;%.1f;%.0f;%.2f;%.1f;%.1f;%.2f;%.2f;%.2f;%.2f\n", 
             millis(), systemON, modeAUTO, trippedByOverload, current_Amps, u, p, napiecieZadajnika, minLimit, maxLimit, Setpoint, Output, currentDac1, currentDac2);
     }
