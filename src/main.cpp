@@ -14,7 +14,7 @@
 #include <Preferences.h>
 
 // ================================================================
-// PINOLOGIA (Nadawanie przyjaznych nazw numerom pinów)
+// PINOLOGIA
 // ================================================================
 #define PIN_PZEM_RX     4
 #define PIN_PZEM_TX     5
@@ -29,8 +29,7 @@
 #define PIN_SD_SCK      16
 #define PIN_SD_MOSI     17
 #define PIN_SD_MISO     18
-
-#define PIN_POT_SYMULACJA 3 // Wolny pin ADC na ESP32-S3 (odczyt 0-3.3V)
+#define PIN_POT_SYMULACJA 3 // Potencjometr symulacji 0-3.3V (ADC)
 
 #define RELAY_ON        LOW
 #define RELAY_OFF       HIGH
@@ -40,22 +39,22 @@
 // ================================================================
 HardwareSerial NextionSerial(1);
 HardwareSerial PzemSerial(2);
-
 EasyNex myNex(NextionSerial);
 PZEM004Tv30 pzem(PzemSerial, PIN_PZEM_RX, PIN_PZEM_TX);
 DHT dht(PIN_DHT, DHT11);
-
 DFRobot_GP8403 dac(&Wire, 0x58);
 Adafruit_ADS1115 ads;
 Preferences memory;
 
-// Obiekty i zmienne do obsługi regulatora PID
+// --- PARAMETRY PID ---
 double Setpoint;
 double Input;
 double Output;
-// NOWE ZAAWANSOWANE NASTAWY Z PREDYKCJĄ (P, I, D)
-// Dodano parametr D (0.15), który przewiduje nagłe skoki na granulatorze
 PID myPID(&Input, &Output, &Setpoint, 0.5, 0.1, 0.15, DIRECT);
+
+// --- TWARDE LIMITY MASZYNY ---
+const float MIN_DAC_VOLTAGE = 3.5; // 17.5 Hz z 50 Hz = 3.5V (Podłoga!)
+const float MAX_DAC_VOLTAGE = 10.0;
 
 // ================================================================
 // ZMIENNE GLOBALNE
@@ -64,17 +63,16 @@ float minLimit = 10.0;
 float maxLimit = 40.0;
 bool systemON = false;
 bool modeAUTO = true;
-bool trippedByOverload = false; // Flaga określająca, czy wywaliło awaryjnie
+bool trippedByOverload = false;
 
 float napiecieZadajnika = 0.0;
 float currentDac1 = 0.0;
 float currentDac2 = 0.0;
-String logFileName = "/log_000.csv";
 
-unsigned long lastUpdate = 0;       // Zegar dla ekranu (1000ms)
-unsigned long lastLogTime = 0;      // Zegar dla SD (1000ms)
-unsigned long lastPIDTime = 0;      // NOWY ZEGAR DLA PID i PZEM (200ms)
-unsigned long lastFastUpdate = 0;   // Zegar dla maszyn (50ms)
+unsigned long lastUpdate = 0;
+unsigned long lastFastUpdate = 0;
+unsigned long lastPIDTime = 0;
+unsigned long lastAITime = 0;     // Zegar dla sztucznej inteligencji
 unsigned long resetPressTime = 0;
 bool isResetPressed = false;
 
@@ -87,8 +85,11 @@ unsigned long buttonPressTime_Magia = 0;
 bool isButtonPressed_Magia = false;
 const unsigned long LONG_PRESS_TIME = 3000;
 
-// Ostatni zapamiętany prąd do logiki globalnej
 float current_Amps = 0.0;
+
+// Zmienne do analizy "AI"
+float ai_sumAmps = 0.0;
+int ai_samples = 0;
 
 // ================================================================
 // FUNKCJE POMOCNICZE
@@ -107,29 +108,22 @@ void scanI2C() {
             nDevices++;                        
         }
     }
-    if (nDevices == 0) Serial.println("[I2C] Brak urzadzen! Sprawdz kable.");
-    else Serial.println("[I2C] Koniec skanowania.");
+    if (nDevices == 0) Serial.println("[I2C] Brak urzadzen!");
 }
 
 void initSD() {
     SPI.begin(PIN_SD_SCK, PIN_SD_MISO, PIN_SD_MOSI, PIN_SD_CS); 
     if(!SD.begin(PIN_SD_CS)) { 
-        Serial.println("[SD] BLAD INICJALIZACJI!");
+        Serial.println("[SD] BLAD KARTY!");
         myNex.writeStr("sd.txt", "ERR"); 
         return; 
     }
-    int i = 0;
-    while(true) {
-        logFileName = "/log_" + String(i) + ".csv"; 
-        if(!SD.exists(logFileName)) break; 
-        i++;
-    }
-    File f = SD.open(logFileName, FILE_WRITE); 
+    // Zapisujemy nagłówek dla logów "AI"
+    File f = SD.open("/AI_LOG.txt", FILE_APPEND); 
     if(f) {
-        // Profesjonalny nagłówek pod analizę PID
-        f.println("Czas_ms;SystemON;Auto;Awaria_Tripped;Prad_A;Nap_V;Moc_W;Zadajnik_V;MinLimit;MaxLimit;Cel_PID;Wyjscie_PID;DAC1;DAC2"); 
+        f.println("=== START SYSTEMU - ANALIZATOR TRENDOW ==="); 
         f.close(); 
-        Serial.println("[SD] Utworzono plik: " + logFileName);
+        Serial.println("[SD] Aktywowano AI_LOG na karcie.");
     }
 }
 
@@ -138,11 +132,18 @@ void initSD() {
 // ================================================================
 void startRegulator() {
     systemON = true;                      
-    trippedByOverload = false; // Resetujemy stan awarii po ponownym włączeniu
+    trippedByOverload = false; 
     myNex.writeStr("pidonoff.txt", "ON"); 
 
     myPID.SetMode(MANUAL);          
     Output = napiecieZadajnika;     
+
+    // Zabezpieczenie miękkiego startu - jeśli zadajnik ma mniej niż 17.5Hz (3.5V), podbijamy
+    if (Output < MIN_DAC_VOLTAGE) {
+        Output = MIN_DAC_VOLTAGE;
+        Serial.println("[SYS] Zadajnik mial za malo! Wymuszam 17.5Hz (3.5V) dla plynnego startu.");
+    }
+
     currentDac1 = Output;
     currentDac2 = currentDac1 * 0.90;
 
@@ -152,7 +153,6 @@ void startRegulator() {
     dac.setDACOutVoltage(mv_dac2, 1);
     
     delay(50); 
-
     digitalWrite(PIN_RELAY_1, RELAY_ON);  
     digitalWrite(PIN_RELAY_2, RELAY_ON);  
 
@@ -215,17 +215,13 @@ void handleNextionInput() {
                         else if (event == 0x00) { isResetPressed = false; myNex.writeStr("logi0.txt", "..."); }
                     }
                 }
-                
                 if (pageId == 2) {
                     if (event == 0x01) { 
-                        activeButtonID = cmpId; 
-                        isButtonHeld = true; 
+                        activeButtonID = cmpId; isButtonHeld = true; 
                         processButtonAction(activeButtonID); 
                         buttonHoldTimer = millis() + 400;    
-                    }
-                    else if (event == 0x00) { 
-                        activeButtonID = 0; 
-                        isButtonHeld = false; 
+                    } else if (event == 0x00) { 
+                        activeButtonID = 0; isButtonHeld = false; 
                     }
                 }
             }
@@ -237,8 +233,7 @@ void handleNextionInput() {
     }
     if (isResetPressed && (millis() - resetPressTime > 5000)) {
         myNex.writeStr("logi0.txt", "RESTART!"); 
-        delay(500); 
-        ESP.restart(); 
+        delay(500); ESP.restart(); 
     }
 }
 
@@ -256,7 +251,8 @@ void setup() {
 
     delay(1000); 
     Serial.begin(115200); 
-    Serial.println("\n--- SYSTEM V9.6 (Szybki PID + AutoRecovery + LogiPro) ---");
+    Serial.println("\n--- SYSTEM V9.7 (Min 17.5Hz + AI Trend + Serial Log) ---");
+    Serial.println("Format Danych (wklej do Excela): Czas_ms;SystemON;Auto;Awaria;Prad_A;Nap_V;Moc_W;Zadajnik_V;MinLim;MaxLim;Cel_PID;Wyjscie_PID;DAC1;DAC2");
 
     memory.begin("regulator", false); 
     minLimit = memory.getFloat("minLim", 10.0); 
@@ -266,18 +262,13 @@ void setup() {
     myNex.begin(9600);
     PzemSerial.begin(9600, SERIAL_8N1, PIN_PZEM_RX, PIN_PZEM_TX);
     dht.begin();
-
     Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL); 
     scanI2C();                            
     
     ads.setGain(GAIN_TWOTHIRDS); 
-    if (!ads.begin(0x48)) {
-        Serial.println("[ADS] Blad komunikacji 0x48.");
-    }
+    ads.begin(0x48);
 
-    if(dac.begin() != 0) {
-        Serial.println("[DAC] Blad komunikacji 0x58.");
-    } else {
+    if(dac.begin() == 0) {
         dac.setDACOutRange(dac.eOutputRange10V); 
         dac.setDACOutVoltage(0, 0);              
         dac.setDACOutVoltage(0, 1);              
@@ -285,14 +276,14 @@ void setup() {
 
     initSD();
     updateSettingsScreen();
-
     myNex.writeStr("pidonoff.txt", "OFF");
     myNex.writeStr("pracaautoman.txt", "AUT");
     stopRegulator(); 
     
     myPID.SetMode(AUTOMATIC);           
-    myPID.SetOutputLimits(0.0, 10.0);   
-    myPID.SetSampleTime(200); // PRZYSPIESZONO PID: Będzie działał 5 razy na sekundę!
+    // TWARDE OGRANICZENIE: Nie wolno zwalniać poniżej 3.5V (17.5 Hz)!
+    myPID.SetOutputLimits(MIN_DAC_VOLTAGE, MAX_DAC_VOLTAGE);   
+    myPID.SetSampleTime(200); 
     
     Serial.println("SYSTEM GOTOWY");
 }
@@ -338,7 +329,7 @@ void loop() {
             currentDac1 = napiecieZadajnika;
             currentDac2 = currentDac1 * 0.90; 
         } else {
-            if (isnan(Output)) Output = 0.0;
+            if (isnan(Output)) Output = MIN_DAC_VOLTAGE; // Bezpieczeństwo
             currentDac1 = Output;             
             currentDac2 = currentDac1 * 0.90; 
         }
@@ -350,7 +341,7 @@ void loop() {
         dac.setDACOutVoltage(mv_dac2, 1);
     }
 
-    // --- PĘTLA PID I KONTROLI AWARYJNEJ (200ms - Reakcja błyskawiczna) ---
+    // --- PĘTLA PID I KONTROLI AWARYJNEJ (200ms) ---
     if (millis() - lastPIDTime >= 200) {
         lastPIDTime = millis();
 
@@ -362,40 +353,62 @@ void loop() {
             i = (pot_raw / 4095.0) * 50.0; 
         }
         
-        current_Amps = i; // Zapisz do zmiennej globalnej dla innych funkcji
+        current_Amps = i; 
+
+        // Zbieranie danych dla sztucznej inteligencji
+        if (systemON) {
+            ai_sumAmps += current_Amps;
+            ai_samples++;
+        }
 
         // 1. ZABEZPIECZENIE ABSOLUTNE (Odcięcie + 7A)
         if (systemON && current_Amps >= (maxLimit + 7.0)) {
-            Serial.println("[ALARM] Przekroczono limit awaryjny! Zrzucam system!");
+            Serial.println("[ALARM] Przekroczono limit +7A! Awaryjne rozlaczenie!");
             stopRegulator();
             trippedByOverload = true;
         }
 
-        // 2. LOGIKA POWROTU (Auto Recovery)
+        // 2. LOGIKA POWROTU W AUTO
         if (!systemON && trippedByOverload && modeAUTO) {
-            // Jeśli spadło w okolice minimum, odpal z powrotem!
             if (current_Amps <= (minLimit + 2.0)) {
-                Serial.println("[AUTO] Prad zmalal. Automatyczny powrot do pracy.");
-                startRegulator(); // Ta funkcja sama zdejmie flage trippedByOverload
+                Serial.println("[AUTO] Prad wrocil do normy. Odpalam maszyne ponownie.");
+                startRegulator(); 
             }
         }
 
-        // 3. OBLICZENIA PID (Tylko gdy system pracuje, żeby bufor był świeży)
+        // 3. OBLICZENIA PID: Zawsze dążymy do maksymalnego obciążenia
         if (systemON) {
-            float margines = (maxLimit - minLimit) * 0.15; 
-            if (current_Amps > (maxLimit - margines)) {
-                Setpoint = maxLimit - margines;
-            } else if (current_Amps < (minLimit + margines)) {
-                Setpoint = minLimit + margines;
-            } else {
-                Setpoint = current_Amps; 
-            }
+            // PID chce zawsze utrzymać maszynę tuż pod limitem MAX (dajemy 0.5A marginesu oddechu)
+            Setpoint = maxLimit - 0.5; 
             Input = current_Amps;         
             myPID.Compute();   
         }
     }
 
-    // --- WOLNA PĘTLA EKRANU I SD (1000ms - Zeby nie blokować sprzętu) ---
+    // --- SZTUCZNA INTELIGENCJA NA SD (co 15 sekund) ---
+    if (millis() - lastAITime >= 15000) {
+        lastAITime = millis();
+        if (systemON && ai_samples > 0) {
+            float avg_Amps = ai_sumAmps / ai_samples;
+            String wniosek = "";
+            
+            if (avg_Amps < (maxLimit - 10.0)) wniosek = "Maszyna mocno niedociazona. Sugerowane podniesienie MinLimit.";
+            else if (avg_Amps < (maxLimit - 3.0)) wniosek = "Praca stabilna, ale mozna zwiekszyc posuw.";
+            else wniosek = "Praca na pelnych obrotach. Parametry optymalne.";
+
+            // Zapisz wniosek na SD
+            if(SD.cardType() != CARD_NONE) {
+                File f = SD.open("/AI_LOG.txt", FILE_APPEND);
+                if(f) {
+                    f.printf("Czas: %lu ms | Sredni prad: %.1f A | Cel: %.1f A | WNIOSEK: %s\n", millis(), avg_Amps, maxLimit, wniosek.c_str());
+                    f.close();
+                }
+            }
+            ai_sumAmps = 0.0; ai_samples = 0; // Reset próbek
+        }
+    }
+
+    // --- WOLNA PĘTLA EKRANU I SERIAL LOGGERA (1000ms) ---
     if (millis() - lastUpdate >= 1000) {
         lastUpdate = millis(); 
 
@@ -415,16 +428,12 @@ void loop() {
             
             char buf[16]; 
             sprintf(buf, "%.3f A", current_Amps); 
-            myNex.writeStr("granampery.txt", buf); 
-            myNex.writeStr("natgr.txt", buf);
-            
+            myNex.writeStr("granampery.txt", buf); myNex.writeStr("natgr.txt", buf);
             sprintf(buf, "%.1f V", u); myNex.writeStr("napgr.txt", buf);
             sprintf(buf, "%.0f W", p); myNex.writeStr("mocczy.txt", buf);
             sprintf(buf, "%.0f VA", s); myNex.writeStr("mocpoz.txt", buf);
             sprintf(buf, "%.0f Var", q); myNex.writeStr("mocbie.txt", buf);
             sprintf(buf, "%.2f", pf); myNex.writeStr("wspmoc.txt", buf);
-        } else { 
-            myNex.writeStr("napgr.txt", "ERR");
         }
 
         if(!isnan(t)) { 
@@ -433,40 +442,19 @@ void loop() {
         }
 
         char dacBuf[10];
-        sprintf(dacBuf, "%.2f V", currentDac1); 
-        myNex.writeStr("pod1.txt", dacBuf);
-        myNex.writeStr("dac1.txt", dacBuf);
-        
-        sprintf(dacBuf, "%.2f V", currentDac2);
-        myNex.writeStr("pod2.txt", dacBuf);
-        myNex.writeStr("dac2.txt", dacBuf);
+        sprintf(dacBuf, "%.2f V", currentDac1); myNex.writeStr("pod1.txt", dacBuf); myNex.writeStr("dac1.txt", dacBuf);
+        sprintf(dacBuf, "%.2f V", currentDac2); myNex.writeStr("pod2.txt", dacBuf); myNex.writeStr("dac2.txt", dacBuf);
 
-        // PROFESJONALNY ZAPIS NA KARTĘ (Do analizy)
         if(SD.cardType() != CARD_NONE) { 
              float gb = SD.totalBytes() / (1024.0*1024.0*1024.0); 
              myNex.writeStr("sd.txt", String(gb, 1) + " GB"); 
-             
-             File f = SD.open(logFileName, FILE_APPEND); 
-             if(f) {
-                 // Format: Czas_ms;SystemON;Auto;Awaria_Tripped;Prad_A;Nap_V;Moc_W;Zadajnik_V;MinLimit;MaxLimit;Cel_PID;Wyjscie_PID;DAC1;DAC2
-                 f.print(millis()); f.print(";");
-                 f.print(systemON); f.print(";");
-                 f.print(modeAUTO); f.print(";");
-                 f.print(trippedByOverload); f.print(";");
-                 f.print(current_Amps, 3); f.print(";"); 
-                 f.print(u, 1); f.print(";");
-                 f.print(p, 0); f.print(";");
-                 f.print(napiecieZadajnika, 2); f.print(";");
-                 f.print(minLimit, 1); f.print(";");
-                 f.print(maxLimit, 1); f.print(";");
-                 f.print(Setpoint, 2); f.print(";");
-                 f.print(Output, 2); f.print(";");
-                 f.print(currentDac1, 2); f.print(";");
-                 f.println(currentDac2, 2); 
-                 f.close(); 
-             }
         } else {
             myNex.writeStr("sd.txt", "NO SD"); 
         }
+
+        // --- ZAPIS CSV BEZPOŚREDNIO DO PORTU SZEREGOWEGO (Zamiast na SD) ---
+        // Kopiujesz te linie i masz gotowego Excela!
+        Serial.printf("%lu;%d;%d;%d;%.3f;%.1f;%.0f;%.2f;%.1f;%.1f;%.2f;%.2f;%.2f;%.2f\n", 
+            millis(), systemON, modeAUTO, trippedByOverload, current_Amps, u, p, napiecieZadajnika, minLimit, maxLimit, Setpoint, Output, currentDac1, currentDac2);
     }
 }
