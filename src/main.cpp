@@ -14,7 +14,7 @@
 #include <Preferences.h>
 #include <WiFi.h>              
 #include <WebServer.h>         
-#include <Update.h>            // NOWE: Biblioteka do obsługi aktualizacji OTA
+#include <Update.h>            
 
 // ================================================================
 // PINOLOGIA
@@ -110,11 +110,11 @@ int blinkCount = 0;
 int blinkMax = 0;
 int blinkDuration = 100; 
 
-// Zmienne buforujące dane dla strony WWW
-float pzem_u = 0, pzem_p = 0, pzem_pf = 0;
+// Zmienne buforujące dane dla strony WWW oraz obliczeń Mocy
+float pzem_u = 0, pzem_p = 0, pzem_pf = 0, pzem_s = 0, pzem_q = 0;
 float dht_t = 0, dht_h = 0;
 
-// Deklaracje funkcji z dołu, żeby kompilator ich nie szukał w ciemno
+// Deklaracje funkcji
 void startRegulator();
 void stopRegulator();
 void updateSettingsScreen();
@@ -224,7 +224,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   </style>
 </head>
 <body>
-  <div class="header"><h1>⚙️ Granulator Pro V11</h1></div>
+  <div class="header"><h1>⚙️ Granulator Pro V12</h1></div>
   
   <div class="nav">
     <button class="tablinks active" onclick="openTab(event, 'Panel')">📊 Panel</button>
@@ -251,7 +251,9 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     <div class="card">
       <h3 style="margin-top:0; color:var(--accent);">Odczyt PZEM</h3>
       <div class="row"><span>Napięcie Sieci:</span> <span class="val" id="volt">-- V</span></div>
-      <div class="row"><span>Moc Czynna:</span> <span class="val" id="pow">-- W</span></div>
+      <div class="row"><span>Moc Czynna (P):</span> <span class="val" id="pow">-- W</span></div>
+      <div class="row"><span>Moc Pozorna (S):</span> <span class="val" id="ap_pow">-- VA</span></div>
+      <div class="row"><span>Moc Bierna (Q):</span> <span class="val" id="re_pow">-- Var</span></div>
       <div class="row"><span>Cosinus Fi (PF):</span> <span class="val" id="pf">--</span></div>
     </div>
     <div class="card">
@@ -310,7 +312,6 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   </div>
 
   <script>
-    // System przełączania zakładek
     function openTab(evt, tabName) {
       var i, tabcontent, tablinks;
       tabcontent = document.getElementsByClassName("tab-content");
@@ -321,7 +322,6 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       evt.currentTarget.className += " active";
     }
 
-    // Pobieranie danych z ESP32 (co 1 sekundę)
     setInterval(function() {
       fetch('/api/data').then(res => res.json()).then(data => {
         // Zakładka 1
@@ -341,11 +341,13 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         // Zakładka 2
         document.getElementById('volt').innerText = data.volt + " V";
         document.getElementById('pow').innerText = data.pow + " W";
+        document.getElementById('ap_pow').innerText = data.ap_pow + " VA";
+        document.getElementById('re_pow').innerText = data.re_pow + " Var";
         document.getElementById('pf').innerText = data.pf;
         document.getElementById('temp').innerText = data.temp + " °C";
         document.getElementById('hum').innerText = data.hum + " %";
 
-        // Uzupełnienie inputów w nastawach (tylko raz, żeby nie nadpisywać jak ktoś pisze)
+        // Nastawy
         if(!document.getElementById('minL').value) document.getElementById('minL').value = data.minL;
         if(!document.getElementById('maxL').value) document.getElementById('maxL').value = data.maxL;
         if(!document.getElementById('kp').value) document.getElementById('kp').value = data.kp;
@@ -354,7 +356,6 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       });
     }, 1000);
 
-    // Wysyłanie akcji przycisków
     function toggleSys() { fetch('/api/toggle_sys', {method: 'POST'}); }
     function toggleMode() { fetch('/api/toggle_mode', {method: 'POST'}); }
 
@@ -385,7 +386,6 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       });
     }
 
-    // System OTA (wgrywanie BIN z paskiem postępu)
     document.getElementById('upload_form').addEventListener('submit', function(e) {
       e.preventDefault();
       var file = document.getElementById('file').files[0];
@@ -437,6 +437,8 @@ void handleApiData() {
     json += "\"autoM\":\"" + String(modeAUTO ? 1 : 0) + "\",";
     json += "\"volt\":\"" + String(pzem_u, 1) + "\",";
     json += "\"pow\":\"" + String(pzem_p, 0) + "\",";
+    json += "\"ap_pow\":\"" + String(pzem_s, 0) + "\",";
+    json += "\"re_pow\":\"" + String(pzem_q, 0) + "\",";
     json += "\"pf\":\"" + String(pzem_pf, 2) + "\",";
     json += "\"temp\":\"" + String(dht_t, 1) + "\",";
     json += "\"hum\":\"" + String(dht_h, 0) + "\",";
@@ -464,10 +466,10 @@ void handleSetLimits() {
     if (server.hasArg("min") && server.hasArg("max")) {
         minLimit = server.arg("min").toFloat();
         maxLimit = server.arg("max").toFloat();
-        updateSettingsScreen(); // Aktualizacja ekranu Nextion
+        updateSettingsScreen(); 
         memory.putFloat("minLim", minLimit);
         memory.putFloat("maxLim", maxLimit);
-        triggerBlink(1, 1000); // 1 sekunda ciągłego świecenia LED
+        triggerBlink(1, 1000); 
     }
     server.send(200, "text/plain", "OK");
 }
@@ -508,20 +510,17 @@ void handleSDRead() {
     String path = "/" + server.arg("f");
     File file = SD.open(path, FILE_READ);
     if (!file) { server.send(404, "text/plain", "Nie znaleziono"); return; }
-    server.streamFile(file, "text/plain"); // Bardzo wydajne sprzętowe przesyłanie!
+    server.streamFile(file, "text/plain"); 
     file.close();
 }
 
-// ULEPSZONY SYSTEM STARTOWANIA WIFI
 void toggleWiFi() {
     if (!isWifiAPActive) {
-        // --- KONFIGURACJA WŁASNEGO IP (192.168.5.1) ---
         IPAddress local_ip(192, 168, 5, 1);
         IPAddress gateway(192, 168, 5, 1);
         IPAddress subnet(255, 255, 255, 0);
         WiFi.softAPConfig(local_ip, gateway, subnet);
         
-        // Zabezpieczenie na hasło WPA2! (Min 8 znaków)
         WiFi.softAP("RegulatorPID", "regpid12"); 
         
         server.begin();
@@ -531,7 +530,7 @@ void toggleWiFi() {
         Serial.println("[WIFI] SIEC UTWORZONA!");
         Serial.println("[WIFI] Nazwa: RegulatorPID");
         Serial.println("[WIFI] Haslo: regpid12");
-        Serial.println("[WIFI] Adres w przegladarce telefonu: 192.168.5.1");
+        Serial.println("[WIFI] Adres w przegladarce: 192.168.5.1");
         Serial.println("=======================================\n");
 
         triggerBlink(3, 100); 
@@ -594,7 +593,7 @@ void processButtonAction(int id) {
 }
 
 // ================================================================
-// PARSER DOTYKU EKRANU (Nextion)
+// PARSER DOTYKU EKRANU
 // ================================================================
 int activeButtonID = 0;          
 unsigned long buttonHoldTimer = 0; 
@@ -661,7 +660,7 @@ void setup() {
     delay(2000); 
     Serial.begin(115200); 
     Serial.setTxTimeoutMs(0); 
-    Serial.println("\n\n--- SYSTEM V12.0 (Smart Industrial HMI + OTA + SD Web) ---");
+    Serial.println("\n\n--- SYSTEM V12.1 (Full Nextion Sync + Web Dashboard) ---");
 
     WiFi.onEvent(onStationConnected, ARDUINO_EVENT_WIFI_AP_STACONNECTED);
 
@@ -673,7 +672,6 @@ void setup() {
     Kd = memory.getFloat("kd", 0.15);
     myPID.SetTunings(Kp, Ki, Kd); 
 
-    // Rejestracja API serwera WWW
     server.on("/", HTTP_GET, handleRoot);
     server.on("/api/data", HTTP_GET, handleApiData);
     server.on("/api/toggle_sys", HTTP_POST, handleToggleSys);
@@ -683,7 +681,7 @@ void setup() {
     server.on("/api/sd_list", HTTP_GET, handleSDList);
     server.on("/sd_read", HTTP_GET, handleSDRead);
 
-    // Endpoint OTA update (Wbudowany w biblioteke)
+    // OTA Update
     server.on("/update", HTTP_POST, []() {
         server.sendHeader("Connection", "close");
         server.send(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
@@ -691,12 +689,12 @@ void setup() {
     }, []() {
         HTTPUpload& upload = server.upload();
         if (upload.status == UPLOAD_FILE_START) {
-            Serial.printf("[OTA] Rozpoczeto wgrywanie pliku: %s\n", upload.filename.c_str());
+            Serial.printf("[OTA] Wgrywanie: %s\n", upload.filename.c_str());
             if (!Update.begin(UPDATE_SIZE_UNKNOWN)) { Update.printError(Serial); }
         } else if (upload.status == UPLOAD_FILE_WRITE) {
             if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) { Update.printError(Serial); }
         } else if (upload.status == UPLOAD_FILE_END) {
-            if (Update.end(true)) { Serial.printf("[OTA] Sukces! Wielkosc: %u B. Maszyna zrobi Restart.\n", upload.totalSize); } 
+            if (Update.end(true)) { Serial.printf("[OTA] Sukces! Wielkosc: %u B. Restart...\n", upload.totalSize); } 
             else { Update.printError(Serial); }
         }
     });
@@ -830,9 +828,11 @@ void loop() {
         }
     }
 
-    // --- WOLNA PĘTLA EKRANU I BUFOROWANIA WWW (1000ms) ---
+    // --- WOLNA PĘTLA EKRANU I SERIAL LOGGERA (1000ms) ---
     if (millis() - lastUpdate >= 1000) {
         lastUpdate = millis(); 
+        
+        // Bezpieczny odczyt z PZEM i DHT do zmiennych globalnych WWW
         pzem_u = pzem.voltage();
         pzem_p = pzem.power();
         pzem_pf = pzem.pf();
@@ -843,19 +843,47 @@ void loop() {
         if (isnan(pzem_p)) pzem_p = 0.0;
         if (isnan(pzem_pf)) pzem_pf = 0.0;
 
+        // OBLICZANIE MOCY I WYSYŁANIE NA EKRAN NEXTION (Zgodnie z obrazkiem!)
         if(pzem_u > 0 || trybTestowy) { 
-            float s = pzem_u * current_Amps; 
-            float q = (s > pzem_p) ? sqrt(s*s - pzem_p*pzem_p) : 0; 
+            // Matematyka prądu zmiennego
+            pzem_s = pzem_u * current_Amps; // Moc Pozorna (S) = U * I
+            pzem_q = (pzem_s > pzem_p) ? sqrt(pzem_s*pzem_s - pzem_p*pzem_p) : 0; // Moc Bierna (Q)
+            
             char buf[16]; 
+            
             sprintf(buf, "%.3f A", current_Amps); 
             myNex.writeStr("granampery.txt", buf); myNex.writeStr("natgr.txt", buf);
+            
             sprintf(buf, "%.1f V", pzem_u); myNex.writeStr("napgr.txt", buf);
+            
             sprintf(buf, "%.0f W", pzem_p); myNex.writeStr("mocczy.txt", buf);
+            
+            // BRAKUJĄCE LINIE: Moc Pozorna, Moc Bierna, Wsp. Mocy 
+            sprintf(buf, "%.0f VA", pzem_s); myNex.writeStr("mocpoz.txt", buf);
+            sprintf(buf, "%.0f Var", pzem_q); myNex.writeStr("mocbie.txt", buf);
+            sprintf(buf, "%.2f", pzem_pf); myNex.writeStr("wspmoc.txt", buf);
+        } else {
+            pzem_s = 0; pzem_q = 0;
         }
 
+        // Temperatura i Wilgotność na Nextion
+        if(!isnan(dht_t)) { 
+            myNex.writeStr("temperatura.txt", String(dht_t, 1));
+            myNex.writeStr("wilgotnosc.txt", String(dht_h, 0));
+        }
+
+        // Zapis napięć DAC
         char dacBuf[10];
         sprintf(dacBuf, "%.2f V", currentDac1); myNex.writeStr("pod1.txt", dacBuf); myNex.writeStr("dac1.txt", dacBuf);
         sprintf(dacBuf, "%.2f V", currentDac2); myNex.writeStr("pod2.txt", dacBuf); myNex.writeStr("dac2.txt", dacBuf);
+
+        // Zapis SD na Nextion
+        if(SD.cardType() != CARD_NONE) { 
+             float gb = SD.totalBytes() / (1024.0*1024.0*1024.0); 
+             myNex.writeStr("sd.txt", String(gb, 1) + " GB"); 
+        } else {
+             myNex.writeStr("sd.txt", "NO SD"); 
+        }
 
         // ZAPIS CSV BEZPOŚREDNIO DO PORTU SZEREGOWEGO
         Serial.printf("%lu;%d;%d;%d;%.3f;%.1f;%.0f;%.2f;%.1f;%.1f;%.2f;%.2f;%.2f;%.2f\n", 
