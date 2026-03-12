@@ -14,6 +14,7 @@
 #include <Preferences.h>
 #include <WiFi.h>              
 #include <WebServer.h>         
+#include <Update.h>            // NOWE: Biblioteka do obsługi aktualizacji OTA
 
 // ================================================================
 // PINOLOGIA
@@ -32,8 +33,6 @@
 #define PIN_SD_MOSI     17
 #define PIN_SD_MISO     18
 #define PIN_POT_SYMULACJA 3 
-
-// --- NOWY PIN: DIODA SYGNALIZACYJNA LED ---
 #define PIN_LED 2 
 
 #define RELAY_ON        LOW
@@ -96,7 +95,7 @@ int ai_samples = 0;
 // Zmienne do obsługi WiFi
 bool isWifiAPActive = false;
 
-// ULEPSZONE ZMIENNE PRZYCISKU
+// ZMIENNE PRZYCISKU
 unsigned long buttonPressTime = 0; 
 unsigned long lastClickTime = 0;
 int clickCount = 0;
@@ -104,12 +103,21 @@ bool buttonWasPressed = false;
 const unsigned long CLICK_TIMEOUT = 800;    
 const unsigned long LONG_PRESS_TIME = 3000; 
 
-// Zmienne do płynnej sygnalizacji LED (NON-BLOCKING)
+// Zmienne do płynnej sygnalizacji LED
 unsigned long ledTimer = 0;
 int ledState = LOW;
 int blinkCount = 0;
 int blinkMax = 0;
 int blinkDuration = 100; 
+
+// Zmienne buforujące dane dla strony WWW
+float pzem_u = 0, pzem_p = 0, pzem_pf = 0;
+float dht_t = 0, dht_h = 0;
+
+// Deklaracje funkcji z dołu, żeby kompilator ich nie szukał w ciemno
+void startRegulator();
+void stopRegulator();
+void updateSettingsScreen();
 
 // ================================================================
 // FUNKCJE POMOCNICZE I SYGNALIZACYJNE
@@ -171,7 +179,7 @@ void initSD() {
 }
 
 // ================================================================
-// STRONY WWW (HTML + CSS + JS)
+// STRONA WWW (HTML + CSS + JS) - ZAAWANSOWANY UI
 // ================================================================
 const char INDEX_HTML[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
@@ -179,106 +187,261 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Regulator PID - Panel</title>
+  <title>Regulator PID - Centrum Kontroli</title>
   <style>
-    body { background-color: #121212; color: #ffffff; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; text-align: center; margin: 0; padding: 10px; }
-    h1 { color: #00bcd4; font-size: 24px; }
-    .card { background-color: #1e1e1e; border-radius: 12px; padding: 20px; margin: 15px auto; max-width: 450px; box-shadow: 0 4px 8px rgba(0,0,0,0.3); }
-    .data-row { display: flex; justify-content: space-between; font-size: 18px; margin-bottom: 10px; border-bottom: 1px solid #333; padding-bottom: 5px;}
-    .data-val { font-weight: bold; color: #4caf50; }
-    label { display: block; text-align: left; font-size: 14px; color: #aaa; margin-top: 15px; }
-    input[type="number"] { width: 100%; padding: 12px; margin-top: 5px; background: #2a2a2a; border: 1px solid #444; color: white; border-radius: 6px; font-size: 16px; box-sizing: border-box;}
-    button { background-color: #00bcd4; color: #000; border: none; padding: 15px 20px; font-size: 18px; font-weight: bold; border-radius: 8px; cursor: pointer; width: 100%; margin-top: 20px; }
-    button:hover { background-color: #0097a7; }
-    .btn-danger { background-color: #f44336; color: white; margin-top: 10px; }
+    :root { --bg: #121212; --card: #1e1e1e; --text: #fff; --accent: #00bcd4; --green: #4caf50; --red: #f44336; --orange: #ff9800; }
+    body { background-color: var(--bg); color: var(--text); font-family: 'Segoe UI', sans-serif; margin: 0; padding: 0; }
+    .header { background: #000; padding: 15px; text-align: center; border-bottom: 2px solid var(--accent); }
+    h1 { margin: 0; font-size: 22px; color: var(--accent); }
+    
+    .nav { display: flex; justify-content: space-around; background: #222; padding: 10px 0; overflow-x: auto;}
+    .nav button { background: none; border: none; color: #aaa; font-size: 14px; font-weight: bold; cursor: pointer; padding: 10px; white-space: nowrap; }
+    .nav button.active { color: var(--accent); border-bottom: 2px solid var(--accent); }
+    
+    .tab-content { display: none; padding: 15px; max-width: 500px; margin: 0 auto; }
+    .tab-content.active { display: block; }
+    
+    .card { background: var(--card); border-radius: 12px; padding: 15px; margin-bottom: 15px; box-shadow: 0 4px 8px rgba(0,0,0,0.5); }
+    .row { display: flex; justify-content: space-between; font-size: 16px; padding: 10px 0; border-bottom: 1px solid #333; }
+    .row:last-child { border: none; }
+    .val { font-weight: bold; color: var(--green); }
+    
+    .ctrl-btn { width: 48%; padding: 15px; font-size: 16px; font-weight: bold; border-radius: 8px; border: none; cursor: pointer; color: #fff; transition: 0.2s;}
+    .btn-on { background: var(--green); }
+    .btn-off { background: var(--red); }
+    .btn-auto { background: var(--accent); color: #000; }
+    .btn-man { background: #555; }
+    
+    label { display: block; margin-top: 10px; font-size: 14px; color: #aaa; }
+    input { width: 100%; padding: 10px; margin-top: 5px; background: #2a2a2a; border: 1px solid #444; color: #fff; border-radius: 6px; box-sizing: border-box; }
+    .submit-btn { width: 100%; padding: 15px; margin-top: 15px; background: var(--accent); color: #000; border: none; font-weight: bold; border-radius: 8px; cursor: pointer; }
+    
+    .file-item { display: flex; justify-content: space-between; background: #2a2a2a; padding: 10px; margin-bottom: 5px; border-radius: 6px; }
+    .file-item a { color: var(--accent); text-decoration: none; font-weight: bold; }
+    
+    #prog-container { width: 100%; background: #333; border-radius: 5px; display: none; margin-top: 15px;}
+    #prog-bar { width: 0%; height: 20px; background: var(--green); border-radius: 5px; text-align: center; color: white; line-height: 20px; font-size: 12px;}
   </style>
 </head>
 <body>
-  <h1>🛠️ Panel Serwisowy Granulatora</h1>
+  <div class="header"><h1>⚙️ Granulator Pro V11</h1></div>
   
-  <div class="card">
-    <div class="data-row"><span>Prąd Maszyny:</span> <span class="data-val" id="amp">-- A</span></div>
-    <div class="data-row"><span>Limit (Max):</span> <span class="data-val" id="maxL">-- A</span></div>
-    <div class="data-row"><span>Cel PID (Setpoint):</span> <span class="data-val" id="setp">-- A</span></div>
-    <div class="data-row" style="border:none;"><span>Wyjście DAC (Falownik):</span> <span class="data-val" style="color:#ff9800;" id="dac">-- V</span></div>
+  <div class="nav">
+    <button class="tablinks active" onclick="openTab(event, 'Panel')">📊 Panel</button>
+    <button class="tablinks" onclick="openTab(event, 'Sensory')">📡 Sensory</button>
+    <button class="tablinks" onclick="openTab(event, 'Nastawy')">⚙️ Nastawy</button>
+    <button class="tablinks" onclick="openTab(event, 'SD')">💾 SD Logi</button>
+    <button class="tablinks" onclick="openTab(event, 'OTA')">📥 OTA</button>
   </div>
 
-  <div class="card">
-    <h3 style="margin-top:0; border-bottom: 1px solid #333; padding-bottom:10px;">Strojenie Algorytmu PID</h3>
-    <form action="/update_pid" method="POST">
-      <label><b>P (Proporcjonalny)</b> - Siła natychmiastowej reakcji na błąd.</label>
-      <input type="number" step="0.01" name="kp" id="kp" required>
-      
-      <label><b>I (Całkujący)</b> - Wyrównywanie w czasie do punktu docelowego.</label>
-      <input type="number" step="0.01" name="ki" id="ki" required>
-      
-      <label><b>D (Różniczkujący)</b> - Przewidywanie nagłych skoków (Amortyzator).</label>
-      <input type="number" step="0.01" name="kd" id="kd" required>
-      
-      <button type="submit">💾 ZAPISZ PARAMETRY</button>
-    </form>
+  <div id="Panel" class="tab-content active">
+    <div class="card" style="display: flex; justify-content: space-between;">
+      <button id="btnSys" class="ctrl-btn btn-off" onclick="toggleSys()">Zasilanie: OFF</button>
+      <button id="btnMode" class="ctrl-btn btn-man" onclick="toggleMode()">Tryb: MAN</button>
+    </div>
+    <div class="card">
+      <div class="row"><span>Prąd Maszyny:</span> <span class="val" id="amp">-- A</span></div>
+      <div class="row"><span>Cel PID (Limit):</span> <span class="val" id="setp">-- A</span></div>
+      <div class="row"><span>Awaria (Przeciążenie):</span> <span class="val" id="trip" style="color:var(--red);">NIE</span></div>
+      <div class="row"><span>Wyjście na Falownik:</span> <span class="val" id="dac" style="color:var(--orange);">-- V</span></div>
+    </div>
   </div>
 
-  <div class="card" style="background: transparent; box-shadow: none;">
-    <button class="btn-danger" onclick="window.location.href='/ota'">📥 PRZEJDŹ DO AKTUALIZACJI (OTA)</button>
+  <div id="Sensory" class="tab-content">
+    <div class="card">
+      <h3 style="margin-top:0; color:var(--accent);">Odczyt PZEM</h3>
+      <div class="row"><span>Napięcie Sieci:</span> <span class="val" id="volt">-- V</span></div>
+      <div class="row"><span>Moc Czynna:</span> <span class="val" id="pow">-- W</span></div>
+      <div class="row"><span>Cosinus Fi (PF):</span> <span class="val" id="pf">--</span></div>
+    </div>
+    <div class="card">
+      <h3 style="margin-top:0; color:var(--accent);">Warunki DHT</h3>
+      <div class="row"><span>Temperatura:</span> <span class="val" id="temp">-- °C</span></div>
+      <div class="row"><span>Wilgotność:</span> <span class="val" id="hum">-- %</span></div>
+    </div>
+  </div>
+
+  <div id="Nastawy" class="tab-content">
+    <div class="card">
+      <h3 style="margin-top:0;">Widełki Pracy (Ampery)</h3>
+      <form onsubmit="saveLimits(event)">
+        <label>Limit Minimalny</label>
+        <input type="number" step="0.1" id="minL" required>
+        <label>Limit Maksymalny (Sufit)</label>
+        <input type="number" step="0.1" id="maxL" required>
+        <button type="submit" class="submit-btn">ZAPISZ WIDEŁKI</button>
+      </form>
+    </div>
+    <div class="card">
+      <h3 style="margin-top:0;">Strojenie Algorytmu PID</h3>
+      <form onsubmit="savePID(event)">
+        <label><b>P</b> - Reakcja natychmiastowa</label>
+        <input type="number" step="0.01" id="kp" required>
+        <label><b>I</b> - Wyrównywanie w czasie</label>
+        <input type="number" step="0.01" id="ki" required>
+        <label><b>D</b> - Przewidywanie (Amortyzator)</label>
+        <input type="number" step="0.01" id="kd" required>
+        <button type="submit" class="submit-btn" style="background:var(--orange);">ZAPISZ PID</button>
+      </form>
+    </div>
+  </div>
+
+  <div id="SD" class="tab-content">
+    <div class="card">
+      <h3 style="margin-top:0;">Pliki na karcie SD</h3>
+      <button onclick="loadSD()" style="padding:10px; background:#444; color:#fff; border:none; border-radius:5px; margin-bottom:15px; width:100%;">🔄 Odśwież listę</button>
+      <div id="sd-list">Brak danych... kliknij Odśwież.</div>
+    </div>
+  </div>
+
+  <div id="OTA" class="tab-content">
+    <div class="card">
+      <h3 style="margin-top:0; color:var(--red);">Aktualizacja Systemu (OTA)</h3>
+      <p style="font-size:14px; color:#aaa;">Wybierz plik .bin z najnowszą wersją oprogramowania. Po wgraniu maszyna uruchomi się ponownie.</p>
+      <form method="POST" action="#" enctype="multipart/form-data" id="upload_form">
+        <input type="file" name="update" id="file" accept=".bin" required style="padding: 10px 0;">
+        <button type="submit" class="submit-btn" style="background:var(--red); color:#fff;">🚀 WGRAJ AKTUALIZACJĘ</button>
+      </form>
+      <div id="prog-container">
+        <div id="prog-bar">0%</div>
+      </div>
+      <p id="ota-status" style="margin-top:10px; font-weight:bold;"></p>
+    </div>
   </div>
 
   <script>
+    // System przełączania zakładek
+    function openTab(evt, tabName) {
+      var i, tabcontent, tablinks;
+      tabcontent = document.getElementsByClassName("tab-content");
+      for (i = 0; i < tabcontent.length; i++) tabcontent[i].style.display = "none";
+      tablinks = document.getElementsByClassName("tablinks");
+      for (i = 0; i < tablinks.length; i++) tablinks[i].className = tablinks[i].className.replace(" active", "");
+      document.getElementById(tabName).style.display = "block";
+      evt.currentTarget.className += " active";
+    }
+
+    // Pobieranie danych z ESP32 (co 1 sekundę)
     setInterval(function() {
-      fetch('/api/data').then(response => response.json()).then(data => {
+      fetch('/api/data').then(res => res.json()).then(data => {
+        // Zakładka 1
         document.getElementById('amp').innerText = data.amp + " A";
-        document.getElementById('maxL').innerText = data.maxL + " A";
         document.getElementById('setp').innerText = data.setp + " A";
         document.getElementById('dac').innerText = data.dac + " V";
+        document.getElementById('trip').innerText = data.trip == "1" ? "TAK" : "NIE";
         
+        let btnSys = document.getElementById('btnSys');
+        if(data.sysON == "1") { btnSys.className = "ctrl-btn btn-on"; btnSys.innerText = "Zasilanie: ON"; }
+        else { btnSys.className = "ctrl-btn btn-off"; btnSys.innerText = "Zasilanie: OFF"; }
+        
+        let btnMode = document.getElementById('btnMode');
+        if(data.autoM == "1") { btnMode.className = "ctrl-btn btn-auto"; btnMode.innerText = "Tryb: AUTO"; }
+        else { btnMode.className = "ctrl-btn btn-man"; btnMode.innerText = "Tryb: MAN"; }
+
+        // Zakładka 2
+        document.getElementById('volt').innerText = data.volt + " V";
+        document.getElementById('pow').innerText = data.pow + " W";
+        document.getElementById('pf').innerText = data.pf;
+        document.getElementById('temp').innerText = data.temp + " °C";
+        document.getElementById('hum').innerText = data.hum + " %";
+
+        // Uzupełnienie inputów w nastawach (tylko raz, żeby nie nadpisywać jak ktoś pisze)
+        if(!document.getElementById('minL').value) document.getElementById('minL').value = data.minL;
+        if(!document.getElementById('maxL').value) document.getElementById('maxL').value = data.maxL;
         if(!document.getElementById('kp').value) document.getElementById('kp').value = data.kp;
         if(!document.getElementById('ki').value) document.getElementById('ki').value = data.ki;
         if(!document.getElementById('kd').value) document.getElementById('kd').value = data.kd;
       });
     }, 1000);
+
+    // Wysyłanie akcji przycisków
+    function toggleSys() { fetch('/api/toggle_sys', {method: 'POST'}); }
+    function toggleMode() { fetch('/api/toggle_mode', {method: 'POST'}); }
+
+    function saveLimits(e) {
+      e.preventDefault();
+      let m1 = document.getElementById('minL').value;
+      let m2 = document.getElementById('maxL').value;
+      fetch('/api/set_limits?min='+m1+'&max='+m2, {method: 'POST'}).then(() => alert("Widełki zapisane!"));
+    }
+
+    function savePID(e) {
+      e.preventDefault();
+      let p = document.getElementById('kp').value;
+      let i = document.getElementById('ki').value;
+      let d = document.getElementById('kd').value;
+      fetch('/api/set_pid?kp='+p+'&ki='+i+'&kd='+d, {method: 'POST'}).then(() => alert("PID zaktualizowany!"));
+    }
+
+    function loadSD() {
+      document.getElementById('sd-list').innerHTML = "Ładowanie...";
+      fetch('/api/sd_list').then(res => res.json()).then(data => {
+        let html = "";
+        data.forEach(f => {
+          html += `<div class='file-item'><a href='/sd_read?f=${f.name}' target='_blank'>📄 ${f.name}</a> <span>${f.size} KB</span></div>`;
+        });
+        if(html === "") html = "Brak plików na karcie.";
+        document.getElementById('sd-list').innerHTML = html;
+      });
+    }
+
+    // System OTA (wgrywanie BIN z paskiem postępu)
+    document.getElementById('upload_form').addEventListener('submit', function(e) {
+      e.preventDefault();
+      var file = document.getElementById('file').files[0];
+      if(!file) return;
+      var data = new FormData();
+      data.append('update', file, file.name);
+      
+      document.getElementById('prog-container').style.display = 'block';
+      document.getElementById('ota-status').innerText = "Wgrywanie...";
+      
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', '/update', true);
+      xhr.upload.addEventListener('progress', function(e) {
+        if (e.lengthComputable) {
+          var percent = Math.round((e.loaded / e.total) * 100);
+          document.getElementById('prog-bar').style.width = percent + '%';
+          document.getElementById('prog-bar').innerText = percent + '%';
+        }
+      });
+      xhr.onload = function() {
+        if(xhr.status === 200) {
+          document.getElementById('ota-status').style.color = "var(--green)";
+          document.getElementById('ota-status').innerText = "Sukces! Trwa restart maszyny...";
+          setTimeout(() => location.reload(), 5000);
+        } else {
+          document.getElementById('ota-status').style.color = "var(--red)";
+          document.getElementById('ota-status').innerText = "Błąd aktualizacji!";
+        }
+      };
+      xhr.send(data);
+    });
   </script>
 </body>
 </html>
 )rawliteral";
 
-const char OTA_HTML[] PROGMEM = R"rawliteral(
-<!DOCTYPE html>
-<html lang="pl">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Aktualizacja OTA</title>
-  <style>
-    body { background-color: #121212; color: #ffffff; font-family: sans-serif; text-align: center; padding: 20px; }
-    .card { background-color: #1e1e1e; border-radius: 12px; padding: 30px; margin: 20px auto; max-width: 400px; }
-    button { background-color: #4caf50; color: #fff; border: none; padding: 15px; width: 100%; font-size: 16px; border-radius: 8px; margin-top:20px;}
-    .back { background-color: #555; margin-top: 10px; }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <h2>Menedżer Aktualizacji (OTA)</h2>
-    <p style="color:#aaa;">Miejsce na przyszla implementacje zrzutu pliku .bin.</p>
-    <br><br>
-    <button disabled style="background:#333; color:#666;">Wybierz plik .bin (Wkrotce)</button>
-    <button class="back" onclick="window.location.href='/'">Powrót do panelu</button>
-  </div>
-</body>
-</html>
-)rawliteral";
-
 // ================================================================
-// FUNKCJE SERWERA WWW
+// FUNKCJE SERWERA WWW I API
 // ================================================================
 void handleRoot() { server.send(200, "text/html", INDEX_HTML); }
-void handleOTA() { server.send(200, "text/html", OTA_HTML); }
 
 void handleApiData() {
     String json = "{";
     json += "\"amp\":\"" + String(current_Amps, 2) + "\",";
-    json += "\"maxL\":\"" + String(maxLimit, 1) + "\",";
     json += "\"setp\":\"" + String(Setpoint, 2) + "\",";
     json += "\"dac\":\"" + String(Output, 2) + "\",";
+    json += "\"trip\":\"" + String(trippedByOverload ? 1 : 0) + "\",";
+    json += "\"sysON\":\"" + String(systemON ? 1 : 0) + "\",";
+    json += "\"autoM\":\"" + String(modeAUTO ? 1 : 0) + "\",";
+    json += "\"volt\":\"" + String(pzem_u, 1) + "\",";
+    json += "\"pow\":\"" + String(pzem_p, 0) + "\",";
+    json += "\"pf\":\"" + String(pzem_pf, 2) + "\",";
+    json += "\"temp\":\"" + String(dht_t, 1) + "\",";
+    json += "\"hum\":\"" + String(dht_h, 0) + "\",";
+    json += "\"minL\":\"" + String(minLimit, 1) + "\",";
+    json += "\"maxL\":\"" + String(maxLimit, 1) + "\",";
     json += "\"kp\":\"" + String(Kp, 3) + "\",";
     json += "\"ki\":\"" + String(Ki, 3) + "\",";
     json += "\"kd\":\"" + String(Kd, 3) + "\"";
@@ -286,56 +449,103 @@ void handleApiData() {
     server.send(200, "application/json", json);
 }
 
-void handleUpdatePID() {
+void handleToggleSys() {
+    if(systemON) stopRegulator(); else startRegulator();
+    server.send(200, "text/plain", "OK");
+}
+
+void handleToggleMode() {
+    modeAUTO = !modeAUTO;
+    myNex.writeStr("pracaautoman.txt", modeAUTO ? "AUT" : "MAN");
+    server.send(200, "text/plain", "OK");
+}
+
+void handleSetLimits() {
+    if (server.hasArg("min") && server.hasArg("max")) {
+        minLimit = server.arg("min").toFloat();
+        maxLimit = server.arg("max").toFloat();
+        updateSettingsScreen(); // Aktualizacja ekranu Nextion
+        memory.putFloat("minLim", minLimit);
+        memory.putFloat("maxLim", maxLimit);
+        triggerBlink(1, 1000); // 1 sekunda ciągłego świecenia LED
+    }
+    server.send(200, "text/plain", "OK");
+}
+
+void handleSetPID() {
     if (server.hasArg("kp") && server.hasArg("ki") && server.hasArg("kd")) {
         Kp = server.arg("kp").toFloat();
         Ki = server.arg("ki").toFloat();
         Kd = server.arg("kd").toFloat();
-        
         memory.putFloat("kp", Kp);
         memory.putFloat("ki", Ki);
         memory.putFloat("kd", Kd);
-        
         myPID.SetTunings(Kp, Ki, Kd);
-        
-        Serial.printf("[WiFi] Zmieniono parametry PID: P=%.3f, I=%.3f, D=%.3f\n", Kp, Ki, Kd);
-        triggerBlink(1, 1000); // 1 sekunda sygnalizacji
+        Serial.printf("[WiFi] Zmieniono PID: P=%.3f, I=%.3f, D=%.3f\n", Kp, Ki, Kd);
+        triggerBlink(1, 1000);
     }
-    server.sendHeader("Location", "/");
-    server.send(303); 
+    server.send(200, "text/plain", "OK");
 }
 
+void handleSDList() {
+    if(SD.cardType() == CARD_NONE) { server.send(200, "application/json", "[]"); return; }
+    File root = SD.open("/");
+    String json = "[";
+    File file = root.openNextFile();
+    while(file){
+        if (!file.isDirectory()) {
+            if(json != "[") json += ",";
+            json += "{\"name\":\"" + String(file.name()) + "\",\"size\":" + String(file.size() / 1024) + "}";
+        }
+        file = root.openNextFile();
+    }
+    json += "]";
+    server.send(200, "application/json", json);
+}
+
+void handleSDRead() {
+    if (!server.hasArg("f")) { server.send(400, "text/plain", "Brak pliku"); return; }
+    String path = "/" + server.arg("f");
+    File file = SD.open(path, FILE_READ);
+    if (!file) { server.send(404, "text/plain", "Nie znaleziono"); return; }
+    server.streamFile(file, "text/plain"); // Bardzo wydajne sprzętowe przesyłanie!
+    file.close();
+}
+
+// ULEPSZONY SYSTEM STARTOWANIA WIFI
 void toggleWiFi() {
     if (!isWifiAPActive) {
+        // --- KONFIGURACJA WŁASNEGO IP (192.168.5.1) ---
         IPAddress local_ip(192, 168, 5, 1);
         IPAddress gateway(192, 168, 5, 1);
         IPAddress subnet(255, 255, 255, 0);
         WiFi.softAPConfig(local_ip, gateway, subnet);
         
-        WiFi.softAP("RegulatorPID", "regpid");
+        // Zabezpieczenie na hasło WPA2! (Min 8 znaków)
+        WiFi.softAP("RegulatorPID", "regpid12"); 
+        
         server.begin();
         isWifiAPActive = true;
         
         Serial.println("\n=======================================");
         Serial.println("[WIFI] SIEC UTWORZONA!");
         Serial.println("[WIFI] Nazwa: RegulatorPID");
-        Serial.println("[WIFI] Haslo: regpid");
-        Serial.println("[WIFI] Adres w przegladarce: 192.168.5.1");
+        Serial.println("[WIFI] Haslo: regpid12");
+        Serial.println("[WIFI] Adres w przegladarce telefonu: 192.168.5.1");
         Serial.println("=======================================\n");
 
-        triggerBlink(3, 100); // 3 migniecia = wlaczono
+        triggerBlink(3, 100); 
     } else {
         server.stop();
         WiFi.softAPdisconnect(true);
         isWifiAPActive = false;
         Serial.println("\n[WIFI] Siec WYLACZONA.\n");
-        
-        triggerBlink(1, 500); // 1 dlugie = wylaczono
+        triggerBlink(1, 500); 
     }
 }
 
 void onStationConnected(WiFiEvent_t event, WiFiEventInfo_t info) {
-    Serial.println("\n[WIFI] Nowe urzadzenie (Telefon) polaczone z maszyna!");
+    Serial.println("\n[WIFI] Telefon polaczyl sie z maszyna!");
     triggerBlink(2, 200); 
 }
 
@@ -384,7 +594,7 @@ void processButtonAction(int id) {
 }
 
 // ================================================================
-// PARSER DOTYKU EKRANU
+// PARSER DOTYKU EKRANU (Nextion)
 // ================================================================
 int activeButtonID = 0;          
 unsigned long buttonHoldTimer = 0; 
@@ -417,29 +627,20 @@ void handleNextionInput() {
                 
                 if (pageId == 2) {
                     if (event == 0x01) { 
-                        activeButtonID = cmpId; 
-                        isButtonHeld = true; 
-                        processButtonAction(activeButtonID); 
-                        buttonHoldTimer = millis() + 400; 
-                    }
-                    else if (event == 0x00) { 
-                        activeButtonID = 0; 
-                        isButtonHeld = false; 
+                        activeButtonID = cmpId; isButtonHeld = true; 
+                        processButtonAction(activeButtonID); buttonHoldTimer = millis() + 400; 
+                    } else if (event == 0x00) { 
+                        activeButtonID = 0; isButtonHeld = false; 
                     }
                 }
             }
         }
     }
-    
     if (isButtonHeld && activeButtonID > 0 && millis() > buttonHoldTimer) {
-        processButtonAction(activeButtonID); 
-        buttonHoldTimer = millis() + 100; 
+        processButtonAction(activeButtonID); buttonHoldTimer = millis() + 100; 
     }
-    
     if (isResetPressed && (millis() - resetPressTime > 5000)) {
-        myNex.writeStr("logi0.txt", "RESTART!"); 
-        delay(500); 
-        ESP.restart(); 
+        myNex.writeStr("logi0.txt", "RESTART!"); delay(500); ESP.restart(); 
     }
 }
 
@@ -457,11 +658,10 @@ void setup() {
     pinMode(PIN_LED, OUTPUT); 
     digitalWrite(PIN_LED, LOW);
 
-    // Dajemy czas na zainicjowanie wirtualnego portu USB COM 
     delay(2000); 
     Serial.begin(115200); 
     Serial.setTxTimeoutMs(0); 
-    Serial.println("\n\n--- SYSTEM V11.0 (PRO WIFI + LED Feedback) ---");
+    Serial.println("\n\n--- SYSTEM V12.0 (Smart Industrial HMI + OTA + SD Web) ---");
 
     WiFi.onEvent(onStationConnected, ARDUINO_EVENT_WIFI_AP_STACONNECTED);
 
@@ -473,10 +673,33 @@ void setup() {
     Kd = memory.getFloat("kd", 0.15);
     myPID.SetTunings(Kp, Ki, Kd); 
 
+    // Rejestracja API serwera WWW
     server.on("/", HTTP_GET, handleRoot);
     server.on("/api/data", HTTP_GET, handleApiData);
-    server.on("/update_pid", HTTP_POST, handleUpdatePID);
-    server.on("/ota", HTTP_GET, handleOTA);
+    server.on("/api/toggle_sys", HTTP_POST, handleToggleSys);
+    server.on("/api/toggle_mode", HTTP_POST, handleToggleMode);
+    server.on("/api/set_limits", HTTP_POST, handleSetLimits);
+    server.on("/api/set_pid", HTTP_POST, handleSetPID);
+    server.on("/api/sd_list", HTTP_GET, handleSDList);
+    server.on("/sd_read", HTTP_GET, handleSDRead);
+
+    // Endpoint OTA update (Wbudowany w biblioteke)
+    server.on("/update", HTTP_POST, []() {
+        server.sendHeader("Connection", "close");
+        server.send(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
+        ESP.restart();
+    }, []() {
+        HTTPUpload& upload = server.upload();
+        if (upload.status == UPLOAD_FILE_START) {
+            Serial.printf("[OTA] Rozpoczeto wgrywanie pliku: %s\n", upload.filename.c_str());
+            if (!Update.begin(UPDATE_SIZE_UNKNOWN)) { Update.printError(Serial); }
+        } else if (upload.status == UPLOAD_FILE_WRITE) {
+            if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) { Update.printError(Serial); }
+        } else if (upload.status == UPLOAD_FILE_END) {
+            if (Update.end(true)) { Serial.printf("[OTA] Sukces! Wielkosc: %u B. Maszyna zrobi Restart.\n", upload.totalSize); } 
+            else { Update.printError(Serial); }
+        }
+    });
 
     NextionSerial.begin(9600, SERIAL_8N1, PIN_NEXT_RX, PIN_NEXT_TX);
     myNex.begin(9600);
@@ -518,7 +741,6 @@ void loop() {
 
     handleNextionInput(); 
 
-    // --- ULEPSZONY MULTI-KLIK PRZYCISKU BOOT ---
     int buttonState = digitalRead(BUTTON_PIN);
     if (buttonState == LOW && !buttonWasPressed) {
         buttonPressTime = millis();
@@ -608,25 +830,27 @@ void loop() {
         }
     }
 
-    // --- WOLNA PĘTLA EKRANU I SERIAL LOGGERA (1000ms) ---
+    // --- WOLNA PĘTLA EKRANU I BUFOROWANIA WWW (1000ms) ---
     if (millis() - lastUpdate >= 1000) {
         lastUpdate = millis(); 
-        float u = pzem.voltage();
-        float p = pzem.power();
-        float pf = pzem.pf();
+        pzem_u = pzem.voltage();
+        pzem_p = pzem.power();
+        pzem_pf = pzem.pf();
+        dht_t = dht.readTemperature();
+        dht_h = dht.readHumidity();
 
-        if (isnan(u)) u = 0.0;
-        if (isnan(p)) p = 0.0;
-        if (isnan(pf)) pf = 0.0;
+        if (isnan(pzem_u)) pzem_u = 0.0;
+        if (isnan(pzem_p)) pzem_p = 0.0;
+        if (isnan(pzem_pf)) pzem_pf = 0.0;
 
-        if(!isnan(u) || trybTestowy) { 
-            float s = u * current_Amps; 
-            float q = (s > p) ? sqrt(s*s - p*p) : 0; 
+        if(pzem_u > 0 || trybTestowy) { 
+            float s = pzem_u * current_Amps; 
+            float q = (s > pzem_p) ? sqrt(s*s - pzem_p*pzem_p) : 0; 
             char buf[16]; 
             sprintf(buf, "%.3f A", current_Amps); 
             myNex.writeStr("granampery.txt", buf); myNex.writeStr("natgr.txt", buf);
-            sprintf(buf, "%.1f V", u); myNex.writeStr("napgr.txt", buf);
-            sprintf(buf, "%.0f W", p); myNex.writeStr("mocczy.txt", buf);
+            sprintf(buf, "%.1f V", pzem_u); myNex.writeStr("napgr.txt", buf);
+            sprintf(buf, "%.0f W", pzem_p); myNex.writeStr("mocczy.txt", buf);
         }
 
         char dacBuf[10];
@@ -635,6 +859,6 @@ void loop() {
 
         // ZAPIS CSV BEZPOŚREDNIO DO PORTU SZEREGOWEGO
         Serial.printf("%lu;%d;%d;%d;%.3f;%.1f;%.0f;%.2f;%.1f;%.1f;%.2f;%.2f;%.2f;%.2f\n", 
-            millis(), systemON, modeAUTO, trippedByOverload, current_Amps, u, p, napiecieZadajnika, minLimit, maxLimit, Setpoint, Output, currentDac1, currentDac2);
+            millis(), systemON, modeAUTO, trippedByOverload, current_Amps, pzem_u, pzem_p, napiecieZadajnika, minLimit, maxLimit, Setpoint, Output, currentDac1, currentDac2);
     }
 }
