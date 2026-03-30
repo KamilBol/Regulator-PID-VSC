@@ -1,3 +1,28 @@
+MASTER ENGINEER MODE AKTYWNY. 
+
+Trafiony, zatopiony! Doskonale to rozkminiłeś. 
+
+### Odpowiedź na sprzęt (Zielone moduły):
+Dokładnie tak, jak mówisz. Układ DFRobot GP8403 ma dwa niezależne wyjścia napięciowe (DAC1 i DAC2), które w locie sterujemy z poziomu procesora (od 0 do 10V). 
+* Jeśli **OBA** falowniki na hali są sterowane prądowo (np. 4-20mA), to musisz użyć **dwóch zielonych płytek**.
+* Z `VOUT0` (DAC1) idziesz na wejście pierwszego modułu, a z jego wyjścia na falownik młyna głównego.
+* Z `VOUT1` (DAC2) idziesz na wejście drugiego modułu, a z jego wyjścia na falownik podajnika otrębów.
+* Oba zielone moduły ustawiasz zworkami na `0-10V -> 0-20mA`, a nasz kod z poziomu WebUI, po wybraniu profilu prądowego, zadba o ucięcie dołu (podłoga 4.8V = 9.6mA = 17.5 Hz), żeby idealnie to wysterować!
+
+
+
+### Wdrożenie regulacji proporcji DAC2 (WebUI)
+Zaszyte na sztywno 10% (0.90) zniknęło. Zamieniłem to na potężne narzędzie w Twoim telefonie. 
+W zakładce "Nastawy" znajdziesz teraz nową sekcję: **Proporcja Falownika 2**. Możesz tam wpisać dowolną wartość od `0` do `100%`. 
+* Wpiszesz `90` -> DAC2 leci 10% wolniej niż DAC1.
+* Wpiszesz `100` -> Oba falowniki idą łeb w łeb (1:1).
+* Wpiszesz `50` -> DAC2 kręci o połowę wolniej od pierwszego.
+
+Wszystko oczywiście zapisuje się automatycznie w trwałej pamięci procesora (EEPROM), więc po zaniku prądu maszyna wstanie z Twoimi ustawionymi procentami.
+
+Oto kompletny, sterylnie sformatowany kod **V12.3**. Zaznacz wszystko w VSC (Ctrl+A), wciśnij Delete i wklej to, co poniżej. Formatowanie jest idealne, bez ukrytych znaków.
+
+```cpp
 // ================================================================
 // DOŁĄCZANIE BIBLIOTEK (Narzędzia do obsługi modułów)
 // ================================================================
@@ -59,8 +84,9 @@ double Output;
 double Kp = 0.5, Ki = 0.1, Kd = 0.15; 
 PID myPID(&Input, &Output, &Setpoint, Kp, Ki, Kd, DIRECT);
 
-// --- TWARDE LIMITY MASZYNY ---
-const float MIN_DAC_VOLTAGE = 3.5; // 17.5 Hz
+// --- ZMIENNE KONFIGURACJI SPRZĘTOWEJ ---
+int outMode = 0; // 0: 0-10V, 1: 0-20mA, 2: 4-20mA
+float currentMinDac = 3.5; 
 const float MAX_DAC_VOLTAGE = 10.0;
 
 // ================================================================
@@ -68,6 +94,8 @@ const float MAX_DAC_VOLTAGE = 10.0;
 // ================================================================
 float minLimit = 10.0;
 float maxLimit = 40.0;
+float dac2Ratio = 90.0; // Stosunek prędkości DAC2 do DAC1 w %
+
 bool systemON = false;
 bool modeAUTO = true;
 bool trippedByOverload = false;
@@ -178,6 +206,17 @@ void initSD() {
     }
 }
 
+void applyOutputMode() {
+    if (outMode == 0 || outMode == 1) {
+        currentMinDac = 3.5;
+    } else if (outMode == 2) {
+        currentMinDac = 4.8;
+    }
+    myPID.SetOutputLimits(currentMinDac, MAX_DAC_VOLTAGE);
+    memory.putInt("outMode", outMode);
+    Serial.printf("[SYS] Konfiguracja: Tryb %d | Podloga PID (17.5Hz) zablokowana na: %.2fV\n", outMode, currentMinDac);
+}
+
 // ================================================================
 // STRONA WWW (HTML + CSS + JS) - ZAAWANSOWANY UI
 // ================================================================
@@ -189,7 +228,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Regulator PID - Centrum Kontroli</title>
   <style>
-    :root { --bg: #121212; --card: #1e1e1e; --text: #fff; --accent: #00bcd4; --green: #4caf50; --red: #f44336; --orange: #ff9800; }
+    :root { --bg: #121212; --card: #1e1e1e; --text: #fff; --accent: #00bcd4; --green: #4caf50; --red: #f44336; --orange: #ff9800; --purple: #9c27b0; }
     body { background-color: var(--bg); color: var(--text); font-family: 'Segoe UI', sans-serif; margin: 0; padding: 0; }
     .header { background: #000; padding: 15px; text-align: center; border-bottom: 2px solid var(--accent); }
     h1 { margin: 0; font-size: 22px; color: var(--accent); }
@@ -213,7 +252,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     .btn-man { background: #555; }
     
     label { display: block; margin-top: 10px; font-size: 14px; color: #aaa; }
-    input { width: 100%; padding: 10px; margin-top: 5px; background: #2a2a2a; border: 1px solid #444; color: #fff; border-radius: 6px; box-sizing: border-box; }
+    input, select { width: 100%; padding: 10px; margin-top: 5px; background: #2a2a2a; border: 1px solid #444; color: #fff; border-radius: 6px; box-sizing: border-box; }
     .submit-btn { width: 100%; padding: 15px; margin-top: 15px; background: var(--accent); color: #000; border: none; font-weight: bold; border-radius: 8px; cursor: pointer; }
     
     .file-item { display: flex; justify-content: space-between; background: #2a2a2a; padding: 10px; margin-bottom: 5px; border-radius: 6px; }
@@ -224,7 +263,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   </style>
 </head>
 <body>
-  <div class="header"><h1>⚙️ Granulator Pro V12</h1></div>
+  <div class="header"><h1>⚙️ Granulator Pro V12.3</h1></div>
   
   <div class="nav">
     <button class="tablinks active" onclick="openTab(event, 'Panel')">📊 Panel</button>
@@ -243,7 +282,8 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       <div class="row"><span>Prąd Maszyny:</span> <span class="val" id="amp">-- A</span></div>
       <div class="row"><span>Cel PID (Limit):</span> <span class="val" id="setp">-- A</span></div>
       <div class="row"><span>Awaria (Przeciążenie):</span> <span class="val" id="trip" style="color:var(--red);">NIE</span></div>
-      <div class="row"><span>Wyjście na Falownik:</span> <span class="val" id="dac" style="color:var(--orange);">-- V</span></div>
+      <div class="row"><span>Wyjście na Falownik 1:</span> <span class="val" id="dac" style="color:var(--orange);">-- V</span></div>
+      <div class="row"><span>Wyjście na Falownik 2:</span> <span class="val" id="dac2v" style="color:var(--purple);">-- V</span></div>
     </div>
   </div>
 
@@ -265,6 +305,28 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
 
   <div id="Nastawy" class="tab-content">
     <div class="card">
+      <h3 style="margin-top:0; color:var(--purple);">Konfiguracja Sygnału (Fizyczna)</h3>
+      <form onsubmit="saveOutMode(event)">
+        <label>Wybierz typ falowników na obiekcie:</label>
+        <select id="outMode">
+          <option value="0">Napięciowe 0 - 10V</option>
+          <option value="1">Prądowe 0 - 20mA (Moduł zewnętrzny)</option>
+          <option value="2">Prądowe 4 - 20mA (Moduł zewnętrzny)</option>
+        </select>
+        <button type="submit" class="submit-btn" style="background:var(--purple); color:#fff;">ZAPISZ PROFIL FALOWNIKA</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0; color:#4caf50;">Proporcja Falownika 2 (DAC 2)</h3>
+      <form onsubmit="saveDacRatio(event)">
+        <label>Ustal stosunek prędkości względem DAC 1 (0-100%)</label>
+        <input type="number" step="1" min="0" max="100" id="dac2r" required>
+        <button type="submit" class="submit-btn" style="background:#4caf50; color:#fff;">ZAPISZ PROPORCJĘ (%)</button>
+      </form>
+    </div>
+
+    <div class="card">
       <h3 style="margin-top:0;">Widełki Pracy (Ampery)</h3>
       <form onsubmit="saveLimits(event)">
         <label>Limit Minimalny</label>
@@ -274,6 +336,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         <button type="submit" class="submit-btn">ZAPISZ WIDEŁKI</button>
       </form>
     </div>
+
     <div class="card">
       <h3 style="margin-top:0;">Strojenie Algorytmu PID</h3>
       <form onsubmit="savePID(event)">
@@ -324,10 +387,10 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
 
     setInterval(function() {
       fetch('/api/data').then(res => res.json()).then(data => {
-        // Zakładka 1
         document.getElementById('amp').innerText = data.amp + " A";
         document.getElementById('setp').innerText = data.setp + " A";
         document.getElementById('dac').innerText = data.dac + " V";
+        document.getElementById('dac2v').innerText = data.dac2v + " V";
         document.getElementById('trip').innerText = data.trip == "1" ? "TAK" : "NIE";
         
         let btnSys = document.getElementById('btnSys');
@@ -338,7 +401,6 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         if(data.autoM == "1") { btnMode.className = "ctrl-btn btn-auto"; btnMode.innerText = "Tryb: AUTO"; }
         else { btnMode.className = "ctrl-btn btn-man"; btnMode.innerText = "Tryb: MAN"; }
 
-        // Zakładka 2
         document.getElementById('volt').innerText = data.volt + " V";
         document.getElementById('pow').innerText = data.pow + " W";
         document.getElementById('ap_pow').innerText = data.ap_pow + " VA";
@@ -347,7 +409,8 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         document.getElementById('temp').innerText = data.temp + " °C";
         document.getElementById('hum').innerText = data.hum + " %";
 
-        // Nastawy
+        if(document.getElementById('outMode').value == "") document.getElementById('outMode').value = data.outM;
+        if(!document.getElementById('dac2r').value) document.getElementById('dac2r').value = data.dac2R;
         if(!document.getElementById('minL').value) document.getElementById('minL').value = data.minL;
         if(!document.getElementById('maxL').value) document.getElementById('maxL').value = data.maxL;
         if(!document.getElementById('kp').value) document.getElementById('kp').value = data.kp;
@@ -358,6 +421,18 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
 
     function toggleSys() { fetch('/api/toggle_sys', {method: 'POST'}); }
     function toggleMode() { fetch('/api/toggle_mode', {method: 'POST'}); }
+
+    function saveOutMode(e) {
+      e.preventDefault();
+      let m = document.getElementById('outMode').value;
+      fetch('/api/set_outmode?m='+m, {method: 'POST'}).then(() => alert("Konfiguracja sprzętowa zaktualizowana!"));
+    }
+
+    function saveDacRatio(e) {
+      e.preventDefault();
+      let r = document.getElementById('dac2r').value;
+      fetch('/api/set_dac2_ratio?r='+r, {method: 'POST'}).then(() => alert("Proporcja zapisana!"));
+    }
 
     function saveLimits(e) {
       e.preventDefault();
@@ -432,6 +507,7 @@ void handleApiData() {
     json += "\"amp\":\"" + String(current_Amps, 2) + "\",";
     json += "\"setp\":\"" + String(Setpoint, 2) + "\",";
     json += "\"dac\":\"" + String(Output, 2) + "\",";
+    json += "\"dac2v\":\"" + String(currentDac2, 2) + "\",";
     json += "\"trip\":\"" + String(trippedByOverload ? 1 : 0) + "\",";
     json += "\"sysON\":\"" + String(systemON ? 1 : 0) + "\",";
     json += "\"autoM\":\"" + String(modeAUTO ? 1 : 0) + "\",";
@@ -446,7 +522,9 @@ void handleApiData() {
     json += "\"maxL\":\"" + String(maxLimit, 1) + "\",";
     json += "\"kp\":\"" + String(Kp, 3) + "\",";
     json += "\"ki\":\"" + String(Ki, 3) + "\",";
-    json += "\"kd\":\"" + String(Kd, 3) + "\"";
+    json += "\"kd\":\"" + String(Kd, 3) + "\",";
+    json += "\"outM\":\"" + String(outMode) + "\",";
+    json += "\"dac2R\":\"" + String(dac2Ratio, 0) + "\"";
     json += "}";
     server.send(200, "application/json", json);
 }
@@ -459,6 +537,27 @@ void handleToggleSys() {
 void handleToggleMode() {
     modeAUTO = !modeAUTO;
     myNex.writeStr("pracaautoman.txt", modeAUTO ? "AUT" : "MAN");
+    server.send(200, "text/plain", "OK");
+}
+
+void handleSetOutMode() {
+    if (server.hasArg("m")) {
+        outMode = server.arg("m").toInt();
+        applyOutputMode();
+        triggerBlink(1, 1000); 
+    }
+    server.send(200, "text/plain", "OK");
+}
+
+void handleSetDac2Ratio() {
+    if (server.hasArg("r")) {
+        dac2Ratio = server.arg("r").toFloat();
+        if (dac2Ratio < 0.0) dac2Ratio = 0.0;
+        if (dac2Ratio > 100.0) dac2Ratio = 100.0;
+        memory.putFloat("dac2Ratio", dac2Ratio);
+        Serial.printf("[SYS] Nowa proporcja DAC2: %.0f%%\n", dac2Ratio);
+        triggerBlink(1, 1000);
+    }
     server.send(200, "text/plain", "OK");
 }
 
@@ -557,9 +656,13 @@ void startRegulator() {
     myNex.writeStr("pidonoff.txt", "ON"); 
     myPID.SetMode(MANUAL);          
     Output = napiecieZadajnika;     
-    if (Output < MIN_DAC_VOLTAGE) Output = MIN_DAC_VOLTAGE;
+    
+    if (Output < currentMinDac) Output = currentMinDac;
+    
     currentDac1 = Output;
-    currentDac2 = currentDac1 * 0.90;
+    // Matematyka dla DAC2 (proporcja)
+    currentDac2 = currentDac1 * (dac2Ratio / 100.0);
+    
     uint16_t mv_dac1 = (currentDac1 <= 10.0) ? (currentDac1 * 1000) : 10000;
     uint16_t mv_dac2 = (currentDac2 <= 10.0) ? (currentDac2 * 1000) : 10000;
     dac.setDACOutVoltage(mv_dac1, 0); 
@@ -660,7 +763,7 @@ void setup() {
     delay(2000); 
     Serial.begin(115200); 
     Serial.setTxTimeoutMs(0); 
-    Serial.println("\n\n--- SYSTEM V12.1 (Full Nextion Sync + Web Dashboard) ---");
+    Serial.println("\n\n--- SYSTEM V12.3 (Full HMI + DAC2 Ratio Control) ---");
 
     WiFi.onEvent(onStationConnected, ARDUINO_EVENT_WIFI_AP_STACONNECTED);
 
@@ -671,17 +774,23 @@ void setup() {
     Ki = memory.getFloat("ki", 0.1);
     Kd = memory.getFloat("kd", 0.15);
     myPID.SetTunings(Kp, Ki, Kd); 
+    
+    // Wczytanie profilu falownika i proporcji dla drugiego podajnika
+    outMode = memory.getInt("outMode", 0);
+    dac2Ratio = memory.getFloat("dac2Ratio", 90.0); // Jesli nie znajdzie, daje 90%
+    applyOutputMode();
 
     server.on("/", HTTP_GET, handleRoot);
     server.on("/api/data", HTTP_GET, handleApiData);
     server.on("/api/toggle_sys", HTTP_POST, handleToggleSys);
     server.on("/api/toggle_mode", HTTP_POST, handleToggleMode);
     server.on("/api/set_limits", HTTP_POST, handleSetLimits);
+    server.on("/api/set_outmode", HTTP_POST, handleSetOutMode);
+    server.on("/api/set_dac2_ratio", HTTP_POST, handleSetDac2Ratio);
     server.on("/api/set_pid", HTTP_POST, handleSetPID);
     server.on("/api/sd_list", HTTP_GET, handleSDList);
     server.on("/sd_read", HTTP_GET, handleSDRead);
 
-    // OTA Update
     server.on("/update", HTTP_POST, []() {
         server.sendHeader("Connection", "close");
         server.send(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
@@ -720,7 +829,6 @@ void setup() {
     stopRegulator(); 
     
     myPID.SetMode(AUTOMATIC);           
-    myPID.SetOutputLimits(MIN_DAC_VOLTAGE, MAX_DAC_VOLTAGE);   
     myPID.SetSampleTime(200); 
     
     Serial.println("SYSTEM GOTOWY - Odpal Monitor Szeregowy!");
@@ -784,11 +892,12 @@ void loop() {
 
         if (!systemON) {
             currentDac1 = napiecieZadajnika;
-            currentDac2 = currentDac1 * 0.90; 
+            // Matematyka dla DAC2 z poziomu ustawien WWW (%)
+            currentDac2 = currentDac1 * (dac2Ratio / 100.0); 
         } else {
-            if (isnan(Output)) Output = MIN_DAC_VOLTAGE; 
+            if (isnan(Output)) Output = currentMinDac; 
             currentDac1 = Output;             
-            currentDac2 = currentDac1 * 0.90; 
+            currentDac2 = currentDac1 * (dac2Ratio / 100.0); 
         }
 
         uint16_t mv_dac1 = (currentDac1 <= 10.0) ? (currentDac1 * 1000) : 10000;
@@ -831,8 +940,6 @@ void loop() {
     // --- WOLNA PĘTLA EKRANU I SERIAL LOGGERA (1000ms) ---
     if (millis() - lastUpdate >= 1000) {
         lastUpdate = millis(); 
-        
-        // Bezpieczny odczyt z PZEM i DHT do zmiennych globalnych WWW
         pzem_u = pzem.voltage();
         pzem_p = pzem.power();
         pzem_pf = pzem.pf();
@@ -843,22 +950,17 @@ void loop() {
         if (isnan(pzem_p)) pzem_p = 0.0;
         if (isnan(pzem_pf)) pzem_pf = 0.0;
 
-        // OBLICZANIE MOCY I WYSYŁANIE NA EKRAN NEXTION (Zgodnie z obrazkiem!)
         if(pzem_u > 0 || trybTestowy) { 
-            // Matematyka prądu zmiennego
-            pzem_s = pzem_u * current_Amps; // Moc Pozorna (S) = U * I
-            pzem_q = (pzem_s > pzem_p) ? sqrt(pzem_s*pzem_s - pzem_p*pzem_p) : 0; // Moc Bierna (Q)
+            pzem_s = pzem_u * current_Amps; 
+            pzem_q = (pzem_s > pzem_p) ? sqrt(pzem_s*pzem_s - pzem_p*pzem_p) : 0; 
             
             char buf[16]; 
-            
             sprintf(buf, "%.3f A", current_Amps); 
             myNex.writeStr("granampery.txt", buf); myNex.writeStr("natgr.txt", buf);
             
             sprintf(buf, "%.1f V", pzem_u); myNex.writeStr("napgr.txt", buf);
-            
             sprintf(buf, "%.0f W", pzem_p); myNex.writeStr("mocczy.txt", buf);
             
-            // BRAKUJĄCE LINIE: Moc Pozorna, Moc Bierna, Wsp. Mocy 
             sprintf(buf, "%.0f VA", pzem_s); myNex.writeStr("mocpoz.txt", buf);
             sprintf(buf, "%.0f Var", pzem_q); myNex.writeStr("mocbie.txt", buf);
             sprintf(buf, "%.2f", pzem_pf); myNex.writeStr("wspmoc.txt", buf);
@@ -866,18 +968,15 @@ void loop() {
             pzem_s = 0; pzem_q = 0;
         }
 
-        // Temperatura i Wilgotność na Nextion
         if(!isnan(dht_t)) { 
             myNex.writeStr("temperatura.txt", String(dht_t, 1));
             myNex.writeStr("wilgotnosc.txt", String(dht_h, 0));
         }
 
-        // Zapis napięć DAC
         char dacBuf[10];
         sprintf(dacBuf, "%.2f V", currentDac1); myNex.writeStr("pod1.txt", dacBuf); myNex.writeStr("dac1.txt", dacBuf);
         sprintf(dacBuf, "%.2f V", currentDac2); myNex.writeStr("pod2.txt", dacBuf); myNex.writeStr("dac2.txt", dacBuf);
 
-        // Zapis SD na Nextion
         if(SD.cardType() != CARD_NONE) { 
              float gb = SD.totalBytes() / (1024.0*1024.0*1024.0); 
              myNex.writeStr("sd.txt", String(gb, 1) + " GB"); 
@@ -885,8 +984,8 @@ void loop() {
              myNex.writeStr("sd.txt", "NO SD"); 
         }
 
-        // ZAPIS CSV BEZPOŚREDNIO DO PORTU SZEREGOWEGO
         Serial.printf("%lu;%d;%d;%d;%.3f;%.1f;%.0f;%.2f;%.1f;%.1f;%.2f;%.2f;%.2f;%.2f\n", 
             millis(), systemON, modeAUTO, trippedByOverload, current_Amps, pzem_u, pzem_p, napiecieZadajnika, minLimit, maxLimit, Setpoint, Output, currentDac1, currentDac2);
     }
 }
+```
