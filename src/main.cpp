@@ -115,6 +115,7 @@ int blinkDuration = 100;
 bool statusDAC = false;
 bool statusADS = false;
 bool statusSD = false;
+bool statusPZEM = false; // Zabezpieczony status PZEM-a przed filtrem zerowym
 
 // Bufor danych
 float pzem_u = 0, pzem_p = 0, pzem_pf = 0, pzem_s = 0, pzem_q = 0;
@@ -175,7 +176,7 @@ void initSD() {
         statusSD = true;
         File f = SD.open("/AI_LOG.txt", FILE_APPEND); 
         if(f) {
-            f.println("=== START SYSTEMU - V12.6 ==="); 
+            f.println("=== START SYSTEMU - V12.7 ==="); 
             f.close(); 
         }
         Serial.println("[SD] Karta aktywna.");
@@ -233,12 +234,13 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     .file-item a { color: var(--accent); text-decoration: none; font-weight: bold; }
     #prog-container { width: 100%; background: #333; border-radius: 5px; display: none; margin-top: 15px;}
     #prog-bar { width: 0%; height: 20px; background: var(--green); border-radius: 5px; text-align: center; color: white; line-height: 20px; font-size: 12px;}
-    .badge-ok { color: var(--green); font-weight: bold; }
-    .badge-err { color: var(--red); font-weight: bold; }
+    .badge-ok { color: var(--green); font-weight: bold; text-shadow: 0 0 5px rgba(76, 175, 80, 0.5); }
+    .badge-err { color: var(--red); font-weight: bold; text-shadow: 0 0 5px rgba(244, 67, 54, 0.5); }
+    .badge-warn { color: var(--orange); font-weight: bold; }
   </style>
 </head>
 <body>
-  <div class="header"><h1>⚙️ Granulator Pro V12.6</h1></div>
+  <div class="header"><h1>⚙️ Granulator Pro V12.7</h1></div>
   
   <div class="nav">
     <button class="tablinks active" onclick="openTab(event, 'Panel')">📊 Panel</button>
@@ -279,7 +281,6 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   </div>
 
   <div id="Nastawy" class="tab-content">
-    
     <div class="card">
       <h3 style="margin-top:0;">1. Widełki Pracy (Ampery)</h3>
       <form onsubmit="saveLimits(event)">
@@ -290,7 +291,6 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         <button type="submit" class="submit-btn">ZAPISZ WIDEŁKI</button>
       </form>
     </div>
-
     <div class="card">
       <h3 style="margin-top:0; color:var(--orange);">2. Proporcje Falowników (0-100%)</h3>
       <form onsubmit="saveRatios(event)">
@@ -301,7 +301,6 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         <button type="submit" class="submit-btn" style="background:var(--orange); color:#fff;">ZAPISZ PROPORCJE</button>
       </form>
     </div>
-
     <div class="card">
       <h3 style="margin-top:0;">3. Strojenie Algorytmu PID</h3>
       <form onsubmit="savePID(event)">
@@ -314,7 +313,6 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         <button type="submit" class="submit-btn" style="background:#555; color:#fff;">ZAPISZ PID</button>
       </form>
     </div>
-
     <div class="card">
       <h3 style="margin-top:0; color:var(--green);">4. Ustawienia Bezpieczeństwa (Odcięcia)</h3>
       <form onsubmit="saveAlarms(event)">
@@ -325,7 +323,6 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         <button type="submit" class="submit-btn" style="background:var(--green); color:#fff;">ZAPISZ ALARMY</button>
       </form>
     </div>
-
     <div class="card">
       <h3 style="margin-top:0; color:var(--purple);">5. Konfiguracja Sygnału (Raz przy montażu)</h3>
       <form onsubmit="saveOutMode(event)">
@@ -342,14 +339,15 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
 
   <div id="SD" class="tab-content">
     <div class="card">
-      <h3 style="margin-top:0; color:#00bcd4;">📡 Status Modułów (Na Żywo)</h3>
+      <h3 style="margin-top:0; color:#00bcd4;">🩺 Status Sprzętu (Na Żywo)</h3>
       <div class="row"><span>Zasilanie (PZEM-004T):</span> <span id="st_pzem" class="badge-err">ŁADOWANIE</span></div>
-      <div class="row"><span>Zadajnik (ADS1115 I2C):</span> <span id="st_ads" class="badge-err">ŁADOWANIE</span></div>
-      <div class="row"><span>Falowniki (GP8403 I2C):</span> <span id="st_dac" class="badge-err">ŁADOWANIE</span></div>
+      <div class="row"><span>Ekran HMI (Nextion):</span> <span id="st_nex" class="badge-ok">UART AKTYWNY</span></div>
+      <div class="row"><span>Zadajnik (ADS1115):</span> <span id="st_ads" class="badge-err">ŁADOWANIE</span></div>
+      <div class="row"><span>Falowniki (GP8403):</span> <span id="st_dac" class="badge-err">ŁADOWANIE</span></div>
+      <div class="row"><span>Izolator I2C (ISO1540):</span> <span id="st_iso" class="badge-err">ŁADOWANIE</span></div>
       <div class="row"><span>Klimat (DHT11):</span> <span id="st_dht" class="badge-err">ŁADOWANIE</span></div>
-      <div class="row"><span>Logi (Karta SD SPI):</span> <span id="st_sd" class="badge-err">ŁADOWANIE</span></div>
+      <div class="row"><span>Logi (Karta SD):</span> <span id="st_sd" class="badge-err">ŁADOWANIE</span></div>
     </div>
-    
     <div class="card">
       <h3 style="margin-top:0;">Pliki na karcie SD</h3>
       <button onclick="loadSD()" style="padding:10px; background:#444; color:#fff; border:none; border-radius:5px; margin-bottom:15px; width:100%;">🔄 Odśwież listę</button>
@@ -383,7 +381,6 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       evt.currentTarget.className += " active";
     }
 
-    // Pętla pobierania danych z maszyny
     setInterval(function() {
       fetch('/api/data').then(res => res.json()).then(data => {
         document.getElementById('amp').innerText = data.amp + " A";
@@ -408,7 +405,6 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         document.getElementById('temp').innerText = data.temp + " °C";
         document.getElementById('hum').innerText = data.hum + " %";
 
-        // Uzupełnienie inputów nastaw
         if(document.getElementById('outMode').value == "") document.getElementById('outMode').value = data.outM;
         if(!document.getElementById('dac1r').value) document.getElementById('dac1r').value = data.dac1R;
         if(!document.getElementById('dac2r').value) document.getElementById('dac2r').value = data.dac2R;
@@ -422,7 +418,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       });
     }, 1000);
 
-    // Pętla Diagnostyki (co 2 sekundy)
+    // Diagnostyka
     setInterval(function() {
       fetch('/api/health').then(res => res.json()).then(data => {
         function setSt(id, st) {
@@ -435,41 +431,40 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         setSt('st_dac', data.dac);
         setSt('st_dht', data.dht);
         setSt('st_sd', data.sd);
-      }).catch(err => console.log("Brak polaczenia z API Diagnostyki"));
+
+        // Dedukcja statusu Izolatora ISO1540
+        let el_iso = document.getElementById('st_iso');
+        if (data.dac === "1" || data.ads === "1") {
+            el_iso.innerText = "ONLINE (Mostek OK)";
+            el_iso.className = "badge-ok";
+        } else {
+            el_iso.innerText = "BŁĄD / BRAK I2C";
+            el_iso.className = "badge-err";
+        }
+      }).catch(err => console.log("Brak API"));
     }, 2000);
 
     function toggleSys() { fetch('/api/toggle_sys', {method: 'POST'}); }
     function toggleMode() { fetch('/api/toggle_mode', {method: 'POST'}); }
-
     function saveOutMode(e) {
       e.preventDefault();
-      let m = document.getElementById('outMode').value;
-      fetch('/api/set_outmode?m='+m, {method: 'POST'}).then(() => alert("Konfiguracja sprzętowa zapisana!"));
+      fetch('/api/set_outmode?m='+document.getElementById('outMode').value, {method: 'POST'}).then(() => alert("Profil zapisany!"));
     }
     function saveRatios(e) {
       e.preventDefault();
-      let r1 = document.getElementById('dac1r').value;
-      let r2 = document.getElementById('dac2r').value;
-      fetch('/api/set_ratios?r1='+r1+'&r2='+r2, {method: 'POST'}).then(() => alert("Proporcje DAC zaktualizowane!"));
+      fetch('/api/set_ratios?r1='+document.getElementById('dac1r').value+'&r2='+document.getElementById('dac2r').value, {method: 'POST'}).then(() => alert("Proporcje zaktualizowane!"));
     }
     function saveAlarms(e) {
       e.preventDefault();
-      let ov = document.getElementById('ovL').value;
-      let rec = document.getElementById('recL').value;
-      fetch('/api/set_alarms?ov='+ov+'&rec='+rec, {method: 'POST'}).then(() => alert("Limity bezpieczeństwa zapisane!"));
+      fetch('/api/set_alarms?ov='+document.getElementById('ovL').value+'&rec='+document.getElementById('recL').value, {method: 'POST'}).then(() => alert("Limity zapisane!"));
     }
     function saveLimits(e) {
       e.preventDefault();
-      let m1 = document.getElementById('minL').value;
-      let m2 = document.getElementById('maxL').value;
-      fetch('/api/set_limits?min='+m1+'&max='+m2, {method: 'POST'}).then(() => alert("Widełki zapisane!"));
+      fetch('/api/set_limits?min='+document.getElementById('minL').value+'&max='+document.getElementById('maxL').value, {method: 'POST'}).then(() => alert("Widełki zapisane!"));
     }
     function savePID(e) {
       e.preventDefault();
-      let p = document.getElementById('kp').value;
-      let i = document.getElementById('ki').value;
-      let d = document.getElementById('kd').value;
-      fetch('/api/set_pid?kp='+p+'&ki='+i+'&kd='+d, {method: 'POST'}).then(() => alert("PID zaktualizowany!"));
+      fetch('/api/set_pid?kp='+document.getElementById('kp').value+'&ki='+document.getElementById('ki').value+'&kd='+document.getElementById('kd').value, {method: 'POST'}).then(() => alert("PID zapisany!"));
     }
 
     function loadSD() {
@@ -504,7 +499,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       xhr.onload = function() {
         if(xhr.status === 200) {
           document.getElementById('ota-status').style.color = "var(--green)";
-          document.getElementById('ota-status').innerText = "Sukces! Trwa restart maszyny...";
+          document.getElementById('ota-status').innerText = "Sukces! Trwa restart...";
           setTimeout(() => location.reload(), 5000);
         } else {
           document.getElementById('ota-status').style.color = "var(--red)";
@@ -553,10 +548,9 @@ void handleApiData() {
     server.send(200, "application/json", json);
 }
 
-// NOWY ENDPOINT: API DIAGNOSTYKI
 void handleApiHealth() {
     String json = "{";
-    json += "\"pzem\":\"" + String(!isnan(pzem_u) ? 1 : 0) + "\",";
+    json += "\"pzem\":\"" + String(statusPZEM ? 1 : 0) + "\",";
     json += "\"dac\":\"" + String(statusDAC ? 1 : 0) + "\",";
     json += "\"ads\":\"" + String(statusADS ? 1 : 0) + "\",";
     json += "\"dht\":\"" + String(!isnan(dht_t) ? 1 : 0) + "\",";
@@ -601,7 +595,7 @@ void handleSetAlarms() {
         recoveryLimit = server.arg("rec").toFloat();
         memory.putFloat("ovrLimit", overloadLimit);
         memory.putFloat("recLimit", recoveryLimit);
-        Serial.printf("[SYS] Ustawienia Bezpieczenstwa - Odciecie: +%.1fA | Powrot: +%.1fA\n", overloadLimit, recoveryLimit);
+        Serial.printf("[SYS] Bezpieczenstwo - Odciecie: +%.1fA | Powrot: +%.1fA\n", overloadLimit, recoveryLimit);
         triggerBlink(1, 1000);
     }
     server.send(200, "text/plain", "OK");
@@ -626,7 +620,6 @@ void handleSetPID() {
         memory.putFloat("ki", Ki);
         memory.putFloat("kd", Kd);
         myPID.SetTunings(Kp, Ki, Kd);
-        Serial.printf("[WiFi] Zmieniono PID: P=%.3f, I=%.3f, D=%.3f\n", Kp, Ki, Kd);
         triggerBlink(1, 1000);
     }
     server.send(200, "text/plain", "OK");
@@ -663,7 +656,6 @@ void toggleWiFi() {
         WiFi.softAPConfig(local_ip, gateway, subnet);
         WiFi.softAP("RegulatorPID", "regpid12"); 
         
-        // REJESTRACJA API (Przeniesiona dla szybkiego startu WiFi)
         server.on("/", HTTP_GET, handleRoot);
         server.on("/api/data", HTTP_GET, handleApiData);
         server.on("/api/health", HTTP_GET, handleApiHealth);
@@ -821,7 +813,7 @@ void setup() {
 
     delay(2000); 
     Serial.begin(115200); 
-    Serial.println("\n\n--- SYSTEM V12.6 (Live Diagnostics + Fast Boot) ---");
+    Serial.println("\n\n--- SYSTEM V12.7 (ZAAWANSOWANA DIAGNOSTYKA) ---");
 
     // 1. ZALADOWANIE PAMIECI
     memory.begin("regulator", false); 
@@ -845,11 +837,11 @@ void setup() {
     if (isnan(overloadLimit) || overloadLimit < 0.0) overloadLimit = 7.0;
     if (isnan(recoveryLimit) || recoveryLimit < 0.0) recoveryLimit = 2.0;
 
-    // 2. NATYCHMIASTOWY START WIFI (Niezaleznie od osprzetu!)
+    // 2. NATYCHMIASTOWY START WIFI 
     WiFi.onEvent(onStationConnected, ARDUINO_EVENT_WIFI_AP_STACONNECTED);
     toggleWiFi();
 
-    // 3. INICJALIZACJA OSPRZĘTU (Z ryzykiem zawieszenia na I2C)
+    // 3. INICJALIZACJA OSPRZĘTU
     NextionSerial.begin(9600, SERIAL_8N1, PIN_NEXT_RX, PIN_NEXT_TX);
     myNex.begin(9600);
     PzemSerial.begin(9600, SERIAL_8N1, PIN_PZEM_RX, PIN_PZEM_TX);
@@ -879,7 +871,6 @@ void setup() {
     myPID.SetMode(AUTOMATIC);           
     myPID.SetSampleTime(200); 
     
-    Serial.println("SYSTEM GOTOWY - Diagnostyka ruszyla!");
     triggerBlink(2, 500); 
 }
 
@@ -922,14 +913,21 @@ void loop() {
         clickCount = 0; 
     }
 
-    // --- PĘTLA DIAGNOSTYCZNA I2C I SD (Co 2 sekundy) ---
+    // --- PĘTLA DIAGNOSTYCZNA (Co 2 sekundy) ---
     if (millis() - lastDiagnosticTime >= 2000) {
         lastDiagnosticTime = millis();
+        
         Wire.beginTransmission(0x58);
         statusDAC = (Wire.endTransmission() == 0);
+        
         Wire.beginTransmission(0x48);
         statusADS = (Wire.endTransmission() == 0);
+        
         statusSD = (SD.cardType() != CARD_NONE);
+
+        // DIAGNOSTYKA PZEM: Czyta wartosc, by zlapac ewentualne NaN PRZED wlaczeniem filtra w petli 1000ms
+        float diag_u = pzem.voltage();
+        statusPZEM = !isnan(diag_u);
     }
 
     // --- SZYBKA PĘTLA (50ms - Napięcia) ---
