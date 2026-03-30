@@ -68,11 +68,11 @@ const float MAX_DAC_VOLTAGE = 10.0;
 // ================================================================
 float minLimit = 10.0;
 float maxLimit = 40.0;
-float dac1Ratio = 100.0; // Stosunek predkosci DAC1 (0-100%)
-float dac2Ratio = 90.0;  // Stosunek predkosci DAC2 (0-100%)
+float dac1Ratio = 100.0; 
+float dac2Ratio = 90.0;  
 
-float overloadLimit = 7.0; // Ampery POWYZEJ maxLimit do twardego odciecia
-float recoveryLimit = 2.0; // Ampery POWYZEJ minLimit do automatycznego wznowienia pracy
+float overloadLimit = 7.0; 
+float recoveryLimit = 2.0; 
 
 bool systemON = false;
 bool modeAUTO = true;
@@ -85,6 +85,7 @@ float currentDac2 = 0.0;
 unsigned long lastUpdate = 0;
 unsigned long lastFastUpdate = 0;
 unsigned long lastPIDTime = 0;
+unsigned long lastDiagnosticTime = 0;
 unsigned long resetPressTime = 0;
 bool isResetPressed = false;
 
@@ -104,12 +105,16 @@ bool buttonWasPressed = false;
 const unsigned long CLICK_TIMEOUT = 800;    
 const unsigned long LONG_PRESS_TIME = 3000; 
 
-// Zmienne LED
+// Zmienne LED i Diagnostyka
 unsigned long ledTimer = 0;
 int ledState = LOW;
 int blinkCount = 0;
 int blinkMax = 0;
 int blinkDuration = 100; 
+
+bool statusDAC = false;
+bool statusADS = false;
+bool statusSD = false;
 
 // Bufor danych
 float pzem_u = 0, pzem_p = 0, pzem_pf = 0, pzem_s = 0, pzem_q = 0;
@@ -166,15 +171,18 @@ void scanI2C() {
 
 void initSD() {
     SPI.begin(PIN_SD_SCK, PIN_SD_MISO, PIN_SD_MOSI, PIN_SD_CS); 
-    if(!SD.begin(PIN_SD_CS)) { 
+    if(SD.begin(PIN_SD_CS)) { 
+        statusSD = true;
+        File f = SD.open("/AI_LOG.txt", FILE_APPEND); 
+        if(f) {
+            f.println("=== START SYSTEMU - V12.6 ==="); 
+            f.close(); 
+        }
+        Serial.println("[SD] Karta aktywna.");
+    } else {
+        statusSD = false;
         Serial.println("[SD] BLAD KARTY!");
         myNex.writeStr("sd.txt", "ERR"); 
-        return; 
-    }
-    File f = SD.open("/AI_LOG.txt", FILE_APPEND); 
-    if(f) {
-        f.println("=== START SYSTEMU - V12.5 ==="); 
-        f.close(); 
     }
 }
 
@@ -225,16 +233,18 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     .file-item a { color: var(--accent); text-decoration: none; font-weight: bold; }
     #prog-container { width: 100%; background: #333; border-radius: 5px; display: none; margin-top: 15px;}
     #prog-bar { width: 0%; height: 20px; background: var(--green); border-radius: 5px; text-align: center; color: white; line-height: 20px; font-size: 12px;}
+    .badge-ok { color: var(--green); font-weight: bold; }
+    .badge-err { color: var(--red); font-weight: bold; }
   </style>
 </head>
 <body>
-  <div class="header"><h1>⚙️ Granulator Pro V12.5</h1></div>
+  <div class="header"><h1>⚙️ Granulator Pro V12.6</h1></div>
   
   <div class="nav">
     <button class="tablinks active" onclick="openTab(event, 'Panel')">📊 Panel</button>
     <button class="tablinks" onclick="openTab(event, 'Sensory')">📡 Sensory</button>
     <button class="tablinks" onclick="openTab(event, 'Nastawy')">⚙️ Nastawy</button>
-    <button class="tablinks" onclick="openTab(event, 'SD')">💾 SD Logi</button>
+    <button class="tablinks" onclick="openTab(event, 'SD')">🩺 Diagnostyka & SD</button>
     <button class="tablinks" onclick="openTab(event, 'OTA')">📥 OTA</button>
   </div>
 
@@ -269,43 +279,9 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   </div>
 
   <div id="Nastawy" class="tab-content">
-    <div class="card">
-      <h3 style="margin-top:0; color:var(--purple);">Konfiguracja Sygnału</h3>
-      <form onsubmit="saveOutMode(event)">
-        <label>Wybierz typ falowników na obiekcie:</label>
-        <select id="outMode">
-          <option value="0">Napięciowe 0 - 10V</option>
-          <option value="1">Prądowe 0 - 20mA (Moduł zewnętrzny)</option>
-          <option value="2">Prądowe 4 - 20mA (Moduł zewnętrzny)</option>
-        </select>
-        <button type="submit" class="submit-btn" style="background:var(--purple); color:#fff;">ZAPISZ PROFIL FALOWNIKA</button>
-      </form>
-    </div>
     
     <div class="card">
-      <h3 style="margin-top:0; color:var(--orange);">Proporcje Falowników (0-100%)</h3>
-      <form onsubmit="saveRatios(event)">
-        <label>DAC 1 (Główny) - Mnożnik prędkości</label>
-        <input type="number" step="1" min="0" max="100" id="dac1r" required>
-        <label>DAC 2 (Pomocniczy) - Mnożnik prędkości</label>
-        <input type="number" step="1" min="0" max="100" id="dac2r" required>
-        <button type="submit" class="submit-btn" style="background:var(--orange); color:#fff;">ZAPISZ PROPORCJE</button>
-      </form>
-    </div>
-
-    <div class="card">
-      <h3 style="margin-top:0; color:var(--green);">Ustawienia Bezpieczeństwa (Odcięcia)</h3>
-      <form onsubmit="saveAlarms(event)">
-        <label>Próg Odcięcia Awaryjnego (+ Ampery ponad Max Limit)</label>
-        <input type="number" step="0.1" id="ovL" required>
-        <label>Próg Wznowienia Pracy (+ Ampery powyżej Min Limit)</label>
-        <input type="number" step="0.1" id="recL" required>
-        <button type="submit" class="submit-btn" style="background:var(--green); color:#fff;">ZAPISZ ALARMY</button>
-      </form>
-    </div>
-
-    <div class="card">
-      <h3 style="margin-top:0;">Widełki Pracy (Ampery)</h3>
+      <h3 style="margin-top:0;">1. Widełki Pracy (Ampery)</h3>
       <form onsubmit="saveLimits(event)">
         <label>Limit Minimalny</label>
         <input type="number" step="0.1" id="minL" required>
@@ -316,7 +292,18 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     </div>
 
     <div class="card">
-      <h3 style="margin-top:0;">Strojenie Algorytmu PID</h3>
+      <h3 style="margin-top:0; color:var(--orange);">2. Proporcje Falowników (0-100%)</h3>
+      <form onsubmit="saveRatios(event)">
+        <label>DAC 1 (Główny) - Mnożnik prędkości</label>
+        <input type="number" step="1" min="0" max="100" id="dac1r" required>
+        <label>DAC 2 (Pomocniczy) - Mnożnik prędkości</label>
+        <input type="number" step="1" min="0" max="100" id="dac2r" required>
+        <button type="submit" class="submit-btn" style="background:var(--orange); color:#fff;">ZAPISZ PROPORCJE</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0;">3. Strojenie Algorytmu PID</h3>
       <form onsubmit="savePID(event)">
         <label><b>P</b> - Reakcja natychmiastowa</label>
         <input type="number" step="0.01" id="kp" required>
@@ -327,9 +314,42 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         <button type="submit" class="submit-btn" style="background:#555; color:#fff;">ZAPISZ PID</button>
       </form>
     </div>
+
+    <div class="card">
+      <h3 style="margin-top:0; color:var(--green);">4. Ustawienia Bezpieczeństwa (Odcięcia)</h3>
+      <form onsubmit="saveAlarms(event)">
+        <label>Próg Odcięcia Awaryjnego (+ Ampery ponad Max Limit)</label>
+        <input type="number" step="0.1" id="ovL" required>
+        <label>Próg Wznowienia Pracy (+ Ampery powyżej Min Limit)</label>
+        <input type="number" step="0.1" id="recL" required>
+        <button type="submit" class="submit-btn" style="background:var(--green); color:#fff;">ZAPISZ ALARMY</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0; color:var(--purple);">5. Konfiguracja Sygnału (Raz przy montażu)</h3>
+      <form onsubmit="saveOutMode(event)">
+        <label>Wybierz typ falowników na obiekcie:</label>
+        <select id="outMode">
+          <option value="0">Napięciowe 0 - 10V</option>
+          <option value="1">Prądowe 0 - 20mA (Moduł zewnętrzny)</option>
+          <option value="2">Prądowe 4 - 20mA (Moduł zewnętrzny)</option>
+        </select>
+        <button type="submit" class="submit-btn" style="background:var(--purple); color:#fff;">ZAPISZ PROFIL FALOWNIKA</button>
+      </form>
+    </div>
   </div>
 
   <div id="SD" class="tab-content">
+    <div class="card">
+      <h3 style="margin-top:0; color:#00bcd4;">📡 Status Modułów (Na Żywo)</h3>
+      <div class="row"><span>Zasilanie (PZEM-004T):</span> <span id="st_pzem" class="badge-err">ŁADOWANIE</span></div>
+      <div class="row"><span>Zadajnik (ADS1115 I2C):</span> <span id="st_ads" class="badge-err">ŁADOWANIE</span></div>
+      <div class="row"><span>Falowniki (GP8403 I2C):</span> <span id="st_dac" class="badge-err">ŁADOWANIE</span></div>
+      <div class="row"><span>Klimat (DHT11):</span> <span id="st_dht" class="badge-err">ŁADOWANIE</span></div>
+      <div class="row"><span>Logi (Karta SD SPI):</span> <span id="st_sd" class="badge-err">ŁADOWANIE</span></div>
+    </div>
+    
     <div class="card">
       <h3 style="margin-top:0;">Pliki na karcie SD</h3>
       <button onclick="loadSD()" style="padding:10px; background:#444; color:#fff; border:none; border-radius:5px; margin-bottom:15px; width:100%;">🔄 Odśwież listę</button>
@@ -363,6 +383,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       evt.currentTarget.className += " active";
     }
 
+    // Pętla pobierania danych z maszyny
     setInterval(function() {
       fetch('/api/data').then(res => res.json()).then(data => {
         document.getElementById('amp').innerText = data.amp + " A";
@@ -387,7 +408,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         document.getElementById('temp').innerText = data.temp + " °C";
         document.getElementById('hum').innerText = data.hum + " %";
 
-        // Uzupełnienie inputów (tylko raz, zapobiega nadpisywaniu podczas wpisywania)
+        // Uzupełnienie inputów nastaw
         if(document.getElementById('outMode').value == "") document.getElementById('outMode').value = data.outM;
         if(!document.getElementById('dac1r').value) document.getElementById('dac1r').value = data.dac1R;
         if(!document.getElementById('dac2r').value) document.getElementById('dac2r').value = data.dac2R;
@@ -400,6 +421,22 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         if(!document.getElementById('kd').value) document.getElementById('kd').value = data.kd;
       });
     }, 1000);
+
+    // Pętla Diagnostyki (co 2 sekundy)
+    setInterval(function() {
+      fetch('/api/health').then(res => res.json()).then(data => {
+        function setSt(id, st) {
+          let el = document.getElementById(id);
+          if (st === "1") { el.innerText = "ONLINE"; el.className = "badge-ok"; } 
+          else { el.innerText = "BŁĄD / OFFLINE"; el.className = "badge-err"; }
+        }
+        setSt('st_pzem', data.pzem);
+        setSt('st_ads', data.ads);
+        setSt('st_dac', data.dac);
+        setSt('st_dht', data.dht);
+        setSt('st_sd', data.sd);
+      }).catch(err => console.log("Brak polaczenia z API Diagnostyki"));
+    }, 2000);
 
     function toggleSys() { fetch('/api/toggle_sys', {method: 'POST'}); }
     function toggleMode() { fetch('/api/toggle_mode', {method: 'POST'}); }
@@ -516,6 +553,18 @@ void handleApiData() {
     server.send(200, "application/json", json);
 }
 
+// NOWY ENDPOINT: API DIAGNOSTYKI
+void handleApiHealth() {
+    String json = "{";
+    json += "\"pzem\":\"" + String(!isnan(pzem_u) ? 1 : 0) + "\",";
+    json += "\"dac\":\"" + String(statusDAC ? 1 : 0) + "\",";
+    json += "\"ads\":\"" + String(statusADS ? 1 : 0) + "\",";
+    json += "\"dht\":\"" + String(!isnan(dht_t) ? 1 : 0) + "\",";
+    json += "\"sd\":\"" + String(statusSD ? 1 : 0) + "\"";
+    json += "}";
+    server.send(200, "application/json", json);
+}
+
 void handleToggleSys() {
     if(systemON) stopRegulator(); else startRegulator();
     server.send(200, "text/plain", "OK");
@@ -613,16 +662,40 @@ void toggleWiFi() {
         IPAddress subnet(255, 255, 255, 0);
         WiFi.softAPConfig(local_ip, gateway, subnet);
         WiFi.softAP("RegulatorPID", "regpid12"); 
+        
+        // REJESTRACJA API (Przeniesiona dla szybkiego startu WiFi)
+        server.on("/", HTTP_GET, handleRoot);
+        server.on("/api/data", HTTP_GET, handleApiData);
+        server.on("/api/health", HTTP_GET, handleApiHealth);
+        server.on("/api/toggle_sys", HTTP_POST, handleToggleSys);
+        server.on("/api/toggle_mode", HTTP_POST, handleToggleMode);
+        server.on("/api/set_limits", HTTP_POST, handleSetLimits);
+        server.on("/api/set_outmode", HTTP_POST, handleSetOutMode);
+        server.on("/api/set_ratios", HTTP_POST, handleSetRatios);
+        server.on("/api/set_alarms", HTTP_POST, handleSetAlarms);
+        server.on("/api/set_pid", HTTP_POST, handleSetPID);
+        server.on("/api/sd_list", HTTP_GET, handleSDList);
+        server.on("/sd_read", HTTP_GET, handleSDRead);
+        
+        server.on("/update", HTTP_POST, []() {
+            server.sendHeader("Connection", "close");
+            server.send(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
+            ESP.restart();
+        }, []() {
+            HTTPUpload& upload = server.upload();
+            if (upload.status == UPLOAD_FILE_START) {
+                if (!Update.begin(UPDATE_SIZE_UNKNOWN)) { Update.printError(Serial); }
+            } else if (upload.status == UPLOAD_FILE_WRITE) {
+                if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) { Update.printError(Serial); }
+            } else if (upload.status == UPLOAD_FILE_END) {
+                if (!Update.end(true)) { Update.printError(Serial); }
+            }
+        });
+
         server.begin();
         isWifiAPActive = true;
         Serial.println("\n[WIFI] SIEC UTWORZONA! Adres: 192.168.5.1\n");
         triggerBlink(3, 100); 
-    } else {
-        server.stop();
-        WiFi.softAPdisconnect(true);
-        isWifiAPActive = false;
-        Serial.println("\n[WIFI] Siec WYLACZONA.\n");
-        triggerBlink(1, 500); 
     }
 }
 void onStationConnected(WiFiEvent_t event, WiFiEventInfo_t info) {
@@ -639,7 +712,6 @@ void startRegulator() {
     myNex.writeStr("pidonoff.txt", "ON"); 
     myPID.SetMode(MANUAL);          
     
-    // Zabezpieczenie przed skrajnymi nastrojami ręcznymi
     if (napiecieZadajnika < currentMinDac) Output = currentMinDac;
     else if (napiecieZadajnika > MAX_DAC_VOLTAGE) Output = MAX_DAC_VOLTAGE;
     else Output = napiecieZadajnika;
@@ -647,7 +719,6 @@ void startRegulator() {
     currentDac1 = Output * (dac1Ratio / 100.0);
     currentDac2 = Output * (dac2Ratio / 100.0);
     
-    // Twardy Kaganiec - Ochrona przed zatrzymaniem falownika 4-20mA w trybie AUTO
     if (currentDac1 < currentMinDac) currentDac1 = currentMinDac;
     if (currentDac2 < currentMinDac) currentDac2 = currentMinDac;
 
@@ -750,10 +821,9 @@ void setup() {
 
     delay(2000); 
     Serial.begin(115200); 
-    Serial.println("\n\n--- SYSTEM V12.5 (SCADA Level: Dual DAC Ratios + Dynamic Security) ---");
+    Serial.println("\n\n--- SYSTEM V12.6 (Live Diagnostics + Fast Boot) ---");
 
-    WiFi.onEvent(onStationConnected, ARDUINO_EVENT_WIFI_AP_STACONNECTED);
-
+    // 1. ZALADOWANIE PAMIECI
     memory.begin("regulator", false); 
     minLimit = memory.getFloat("minLim", 10.0); 
     maxLimit = memory.getFloat("maxLim", 40.0); 
@@ -765,56 +835,36 @@ void setup() {
     outMode = memory.getInt("outMode", 0);
     applyOutputMode();
 
-    // Odczyt proporcji DAC z EEPROM
     dac1Ratio = memory.getFloat("dac1Ratio", 100.0);
     dac2Ratio = memory.getFloat("dac2Ratio", 90.0);
     if (isnan(dac1Ratio) || dac1Ratio < 0.0) dac1Ratio = 0.0; if (dac1Ratio > 100.0) dac1Ratio = 100.0;
     if (isnan(dac2Ratio) || dac2Ratio < 0.0) dac2Ratio = 0.0; if (dac2Ratio > 100.0) dac2Ratio = 100.0;
 
-    // Odczyt progow bezpieczenstwa z EEPROM
     overloadLimit = memory.getFloat("ovrLimit", 7.0);
     recoveryLimit = memory.getFloat("recLimit", 2.0);
     if (isnan(overloadLimit) || overloadLimit < 0.0) overloadLimit = 7.0;
     if (isnan(recoveryLimit) || recoveryLimit < 0.0) recoveryLimit = 2.0;
 
-    server.on("/", HTTP_GET, handleRoot);
-    server.on("/api/data", HTTP_GET, handleApiData);
-    server.on("/api/toggle_sys", HTTP_POST, handleToggleSys);
-    server.on("/api/toggle_mode", HTTP_POST, handleToggleMode);
-    server.on("/api/set_limits", HTTP_POST, handleSetLimits);
-    server.on("/api/set_outmode", HTTP_POST, handleSetOutMode);
-    server.on("/api/set_ratios", HTTP_POST, handleSetRatios);
-    server.on("/api/set_alarms", HTTP_POST, handleSetAlarms);
-    server.on("/api/set_pid", HTTP_POST, handleSetPID);
-    server.on("/api/sd_list", HTTP_GET, handleSDList);
-    server.on("/sd_read", HTTP_GET, handleSDRead);
+    // 2. NATYCHMIASTOWY START WIFI (Niezaleznie od osprzetu!)
+    WiFi.onEvent(onStationConnected, ARDUINO_EVENT_WIFI_AP_STACONNECTED);
+    toggleWiFi();
 
-    server.on("/update", HTTP_POST, []() {
-        server.sendHeader("Connection", "close");
-        server.send(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
-        ESP.restart();
-    }, []() {
-        HTTPUpload& upload = server.upload();
-        if (upload.status == UPLOAD_FILE_START) {
-            Serial.printf("[OTA] Wgrywanie: %s\n", upload.filename.c_str());
-            if (!Update.begin(UPDATE_SIZE_UNKNOWN)) { Update.printError(Serial); }
-        } else if (upload.status == UPLOAD_FILE_WRITE) {
-            if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) { Update.printError(Serial); }
-        } else if (upload.status == UPLOAD_FILE_END) {
-            if (Update.end(true)) { Serial.printf("[OTA] Sukces! Wielkosc: %u B. Restart...\n", upload.totalSize); } 
-            else { Update.printError(Serial); }
-        }
-    });
-
+    // 3. INICJALIZACJA OSPRZĘTU (Z ryzykiem zawieszenia na I2C)
     NextionSerial.begin(9600, SERIAL_8N1, PIN_NEXT_RX, PIN_NEXT_TX);
     myNex.begin(9600);
     PzemSerial.begin(9600, SERIAL_8N1, PIN_PZEM_RX, PIN_PZEM_TX);
     dht.begin();
+    
     Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL); 
-    ads.setGain(GAIN_TWOTHIRDS); 
-    ads.begin(0x48);
+    
+    Wire.beginTransmission(0x48);
+    statusADS = (Wire.endTransmission() == 0);
+    if(statusADS) { ads.setGain(GAIN_TWOTHIRDS); ads.begin(0x48); }
 
-    if(dac.begin() == 0) {
+    Wire.beginTransmission(0x58);
+    statusDAC = (Wire.endTransmission() == 0);
+    if(statusDAC) {
+        dac.begin();
         dac.setDACOutRange(dac.eOutputRange10V); 
         dac.setDACOutVoltage(0, 0);              
         dac.setDACOutVoltage(0, 1);              
@@ -829,11 +879,8 @@ void setup() {
     myPID.SetMode(AUTOMATIC);           
     myPID.SetSampleTime(200); 
     
-    Serial.println("SYSTEM GOTOWY - Odpal Monitor Szeregowy!");
+    Serial.println("SYSTEM GOTOWY - Diagnostyka ruszyla!");
     triggerBlink(2, 500); 
-    
-    // AUTOMATYCZNE URUCHOMIENIE WIFI
-    toggleWiFi();
 }
 
 // ================================================================
@@ -875,11 +922,22 @@ void loop() {
         clickCount = 0; 
     }
 
+    // --- PĘTLA DIAGNOSTYCZNA I2C I SD (Co 2 sekundy) ---
+    if (millis() - lastDiagnosticTime >= 2000) {
+        lastDiagnosticTime = millis();
+        Wire.beginTransmission(0x58);
+        statusDAC = (Wire.endTransmission() == 0);
+        Wire.beginTransmission(0x48);
+        statusADS = (Wire.endTransmission() == 0);
+        statusSD = (SD.cardType() != CARD_NONE);
+    }
+
     // --- SZYBKA PĘTLA (50ms - Napięcia) ---
     if (millis() - lastFastUpdate >= 50) {
         lastFastUpdate = millis(); 
 
-        int16_t adc_surowe = ads.readADC_SingleEnded(0); 
+        int16_t adc_surowe = 0;
+        if(statusADS) adc_surowe = ads.readADC_SingleEnded(0); 
         float napiecie_na_pinie = ads.computeVolts(adc_surowe); 
         float aktualny_odczyt = napiecie_na_pinie * WSPOLCZYNNIK_DZIELNIKA; 
         
@@ -901,22 +959,21 @@ void loop() {
             currentDac1 = Output * (dac1Ratio / 100.0);             
             currentDac2 = Output * (dac2Ratio / 100.0); 
             
-            // TWARDY KAGANIEC (Ochrona dolna w trybie AUTO)
             if (currentDac1 < currentMinDac) currentDac1 = currentMinDac;
             if (currentDac2 < currentMinDac) currentDac2 = currentMinDac;
         }
 
-        // TWARDY KAGANIEC (Ochrona ABSOLUTNA przed przepelnieniem bitowym ujemnym lub ponad 10V)
         if (currentDac1 < 0.0) currentDac1 = 0.0;
         if (currentDac1 > 10.0) currentDac1 = 10.0;
         if (currentDac2 < 0.0) currentDac2 = 0.0;
         if (currentDac2 > 10.0) currentDac2 = 10.0;
 
-        uint16_t mv_dac1 = (uint16_t)(currentDac1 * 1000.0);
-        uint16_t mv_dac2 = (uint16_t)(currentDac2 * 1000.0);
-        
-        dac.setDACOutVoltage(mv_dac1, 0); 
-        dac.setDACOutVoltage(mv_dac2, 1);
+        if(statusDAC) {
+            uint16_t mv_dac1 = (uint16_t)(currentDac1 * 1000.0);
+            uint16_t mv_dac2 = (uint16_t)(currentDac2 * 1000.0);
+            dac.setDACOutVoltage(mv_dac1, 0); 
+            dac.setDACOutVoltage(mv_dac2, 1);
+        }
     }
 
     // --- PĘTLA PID (200ms) ---
@@ -929,21 +986,18 @@ void loop() {
             i = (pot_raw / 4095.0) * 50.0; 
         }
         
-        // Filtr uśredniający prąd (EMA)
         if (current_Amps == 0.0) {
             current_Amps = i;
         } else {
             current_Amps = (i * 0.4) + (current_Amps * 0.6); 
         }
         
-        // Zabezpieczenie Overload uzywajace zmiennej z WebUI
         if (systemON && current_Amps >= (maxLimit + overloadLimit)) {
             Serial.printf("[ALARM] Przekroczono limit +%.1fA! Awaryjne rozlaczenie!\n", overloadLimit);
             stopRegulator();
             trippedByOverload = true;
         }
 
-        // Powrot uzywajacy zmiennej z WebUI
         if (!systemON && trippedByOverload && modeAUTO) {
             if (current_Amps <= (minLimit + recoveryLimit)) {
                 Serial.printf("[AUTO] Prad zmalal o +%.1fA. Odpalam maszyne ponownie.\n", recoveryLimit);
@@ -960,7 +1014,6 @@ void loop() {
             } else {
                 Setpoint = current_Amps; 
             }
-
             Input = current_Amps;         
             myPID.Compute();   
         }
@@ -1006,7 +1059,7 @@ void loop() {
         sprintf(dacBuf, "%.2f V", currentDac1); myNex.writeStr("pod1.txt", dacBuf); myNex.writeStr("dac1.txt", dacBuf);
         sprintf(dacBuf, "%.2f V", currentDac2); myNex.writeStr("pod2.txt", dacBuf); myNex.writeStr("dac2.txt", dacBuf);
 
-        if(SD.cardType() != CARD_NONE) { 
+        if(statusSD) { 
              float gb = SD.totalBytes() / (1024.0*1024.0*1024.0); 
              myNex.writeStr("sd.txt", String(gb, 1) + " GB"); 
         } else {
