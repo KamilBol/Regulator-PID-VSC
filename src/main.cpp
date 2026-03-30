@@ -1,5 +1,5 @@
 // ================================================================
-// DOŁĄCZANIE BIBLIOTEK (Narzędzia do obsługi modułów)
+// DOŁĄCZANIE BIBLIOTEK
 // ================================================================
 #include <Arduino.h>
 #include <Wire.h>
@@ -49,7 +49,6 @@ DHT dht(PIN_DHT, DHT11);
 DFRobot_GP8403 dac(&Wire, 0x58);
 Adafruit_ADS1115 ads;
 Preferences memory;
-
 WebServer server(80); 
 
 // --- PARAMETRY PID ---
@@ -69,7 +68,11 @@ const float MAX_DAC_VOLTAGE = 10.0;
 // ================================================================
 float minLimit = 10.0;
 float maxLimit = 40.0;
-float dac2Ratio = 90.0; 
+float dac1Ratio = 100.0; // Stosunek predkosci DAC1 (0-100%)
+float dac2Ratio = 90.0;  // Stosunek predkosci DAC2 (0-100%)
+
+float overloadLimit = 7.0; // Ampery POWYZEJ maxLimit do twardego odciecia
+float recoveryLimit = 2.0; // Ampery POWYZEJ minLimit do automatycznego wznowienia pracy
 
 bool systemON = false;
 bool modeAUTO = true;
@@ -92,10 +95,8 @@ const int BUTTON_PIN = 0;
 bool trybTestowy = false;
 float current_Amps = 0.0;
 
-// Zmienne do obsługi WiFi
+// Zmienne WiFi i Przycisk
 bool isWifiAPActive = false;
-
-// ZMIENNE PRZYCISKU
 unsigned long buttonPressTime = 0; 
 unsigned long lastClickTime = 0;
 int clickCount = 0;
@@ -110,7 +111,7 @@ int blinkCount = 0;
 int blinkMax = 0;
 int blinkDuration = 100; 
 
-// Zmienne Mocy i Srodowiska
+// Bufor danych
 float pzem_u = 0, pzem_p = 0, pzem_pf = 0, pzem_s = 0, pzem_q = 0;
 float dht_t = 0, dht_h = 0;
 
@@ -172,7 +173,7 @@ void initSD() {
     }
     File f = SD.open("/AI_LOG.txt", FILE_APPEND); 
     if(f) {
-        f.println("=== START SYSTEMU - V12.4 ==="); 
+        f.println("=== START SYSTEMU - V12.5 ==="); 
         f.close(); 
     }
 }
@@ -185,7 +186,7 @@ void applyOutputMode() {
     }
     myPID.SetOutputLimits(currentMinDac, MAX_DAC_VOLTAGE);
     memory.putInt("outMode", outMode);
-    Serial.printf("[SYS] Konfiguracja: Tryb %d | Podloga PID (17.5Hz): %.2fV\n", outMode, currentMinDac);
+    Serial.printf("[SYS] Konfiguracja: Tryb %d | Podloga PID: %.2fV\n", outMode, currentMinDac);
 }
 
 // ================================================================
@@ -199,7 +200,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Regulator PID - Centrum Kontroli</title>
   <style>
-    :root { --bg: #121212; --card: #1e1e1e; --text: #fff; --accent: #00bcd4; --green: #4caf50; --red: #f44336; --orange: #ff9800; --purple: #9c27b0; }
+    :root { --bg: #121212; --card: #1e1e1e; --text: #fff; --accent: #00bcd4; --green: #4caf50; --red: #f44336; --orange: #ff9800; --purple: #9c27b0; --yellow: #ffeb3b; }
     body { background-color: var(--bg); color: var(--text); font-family: 'Segoe UI', sans-serif; margin: 0; padding: 0; }
     .header { background: #000; padding: 15px; text-align: center; border-bottom: 2px solid var(--accent); }
     h1 { margin: 0; font-size: 22px; color: var(--accent); }
@@ -227,7 +228,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   </style>
 </head>
 <body>
-  <div class="header"><h1>⚙️ Granulator Pro V12.4</h1></div>
+  <div class="header"><h1>⚙️ Granulator Pro V12.5</h1></div>
   
   <div class="nav">
     <button class="tablinks active" onclick="openTab(event, 'Panel')">📊 Panel</button>
@@ -269,7 +270,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
 
   <div id="Nastawy" class="tab-content">
     <div class="card">
-      <h3 style="margin-top:0; color:var(--purple);">Konfiguracja Sygnału (Fizyczna)</h3>
+      <h3 style="margin-top:0; color:var(--purple);">Konfiguracja Sygnału</h3>
       <form onsubmit="saveOutMode(event)">
         <label>Wybierz typ falowników na obiekcie:</label>
         <select id="outMode">
@@ -280,14 +281,29 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         <button type="submit" class="submit-btn" style="background:var(--purple); color:#fff;">ZAPISZ PROFIL FALOWNIKA</button>
       </form>
     </div>
+    
     <div class="card">
-      <h3 style="margin-top:0; color:#4caf50;">Proporcja Falownika 2 (DAC 2)</h3>
-      <form onsubmit="saveDacRatio(event)">
-        <label>Ustal stosunek prędkości względem DAC 1 (0-100%)</label>
+      <h3 style="margin-top:0; color:var(--orange);">Proporcje Falowników (0-100%)</h3>
+      <form onsubmit="saveRatios(event)">
+        <label>DAC 1 (Główny) - Mnożnik prędkości</label>
+        <input type="number" step="1" min="0" max="100" id="dac1r" required>
+        <label>DAC 2 (Pomocniczy) - Mnożnik prędkości</label>
         <input type="number" step="1" min="0" max="100" id="dac2r" required>
-        <button type="submit" class="submit-btn" style="background:#4caf50; color:#fff;">ZAPISZ PROPORCJĘ (%)</button>
+        <button type="submit" class="submit-btn" style="background:var(--orange); color:#fff;">ZAPISZ PROPORCJE</button>
       </form>
     </div>
+
+    <div class="card">
+      <h3 style="margin-top:0; color:var(--green);">Ustawienia Bezpieczeństwa (Odcięcia)</h3>
+      <form onsubmit="saveAlarms(event)">
+        <label>Próg Odcięcia Awaryjnego (+ Ampery ponad Max Limit)</label>
+        <input type="number" step="0.1" id="ovL" required>
+        <label>Próg Wznowienia Pracy (+ Ampery powyżej Min Limit)</label>
+        <input type="number" step="0.1" id="recL" required>
+        <button type="submit" class="submit-btn" style="background:var(--green); color:#fff;">ZAPISZ ALARMY</button>
+      </form>
+    </div>
+
     <div class="card">
       <h3 style="margin-top:0;">Widełki Pracy (Ampery)</h3>
       <form onsubmit="saveLimits(event)">
@@ -298,6 +314,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         <button type="submit" class="submit-btn">ZAPISZ WIDEŁKI</button>
       </form>
     </div>
+
     <div class="card">
       <h3 style="margin-top:0;">Strojenie Algorytmu PID</h3>
       <form onsubmit="savePID(event)">
@@ -307,7 +324,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         <input type="number" step="0.01" id="ki" required>
         <label><b>D</b> - Przewidywanie (Amortyzator)</label>
         <input type="number" step="0.01" id="kd" required>
-        <button type="submit" class="submit-btn" style="background:var(--orange);">ZAPISZ PID</button>
+        <button type="submit" class="submit-btn" style="background:#555; color:#fff;">ZAPISZ PID</button>
       </form>
     </div>
   </div>
@@ -370,8 +387,12 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         document.getElementById('temp').innerText = data.temp + " °C";
         document.getElementById('hum').innerText = data.hum + " %";
 
+        // Uzupełnienie inputów (tylko raz, zapobiega nadpisywaniu podczas wpisywania)
         if(document.getElementById('outMode').value == "") document.getElementById('outMode').value = data.outM;
+        if(!document.getElementById('dac1r').value) document.getElementById('dac1r').value = data.dac1R;
         if(!document.getElementById('dac2r').value) document.getElementById('dac2r').value = data.dac2R;
+        if(!document.getElementById('ovL').value) document.getElementById('ovL').value = data.ovL;
+        if(!document.getElementById('recL').value) document.getElementById('recL').value = data.recL;
         if(!document.getElementById('minL').value) document.getElementById('minL').value = data.minL;
         if(!document.getElementById('maxL').value) document.getElementById('maxL').value = data.maxL;
         if(!document.getElementById('kp').value) document.getElementById('kp').value = data.kp;
@@ -386,12 +407,19 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     function saveOutMode(e) {
       e.preventDefault();
       let m = document.getElementById('outMode').value;
-      fetch('/api/set_outmode?m='+m, {method: 'POST'}).then(() => alert("Konfiguracja sprzętowa zaktualizowana!"));
+      fetch('/api/set_outmode?m='+m, {method: 'POST'}).then(() => alert("Konfiguracja sprzętowa zapisana!"));
     }
-    function saveDacRatio(e) {
+    function saveRatios(e) {
       e.preventDefault();
-      let r = document.getElementById('dac2r').value;
-      fetch('/api/set_dac2_ratio?r='+r, {method: 'POST'}).then(() => alert("Proporcja zapisana!"));
+      let r1 = document.getElementById('dac1r').value;
+      let r2 = document.getElementById('dac2r').value;
+      fetch('/api/set_ratios?r1='+r1+'&r2='+r2, {method: 'POST'}).then(() => alert("Proporcje DAC zaktualizowane!"));
+    }
+    function saveAlarms(e) {
+      e.preventDefault();
+      let ov = document.getElementById('ovL').value;
+      let rec = document.getElementById('recL').value;
+      fetch('/api/set_alarms?ov='+ov+'&rec='+rec, {method: 'POST'}).then(() => alert("Limity bezpieczeństwa zapisane!"));
     }
     function saveLimits(e) {
       e.preventDefault();
@@ -462,7 +490,7 @@ void handleApiData() {
     String json = "{";
     json += "\"amp\":\"" + String(current_Amps, 2) + "\",";
     json += "\"setp\":\"" + String(Setpoint, 2) + "\",";
-    json += "\"dac\":\"" + String(Output, 2) + "\",";
+    json += "\"dac\":\"" + String(currentDac1, 2) + "\",";
     json += "\"dac2v\":\"" + String(currentDac2, 2) + "\",";
     json += "\"trip\":\"" + String(trippedByOverload ? 1 : 0) + "\",";
     json += "\"sysON\":\"" + String(systemON ? 1 : 0) + "\",";
@@ -480,7 +508,10 @@ void handleApiData() {
     json += "\"ki\":\"" + String(Ki, 3) + "\",";
     json += "\"kd\":\"" + String(Kd, 3) + "\",";
     json += "\"outM\":\"" + String(outMode) + "\",";
-    json += "\"dac2R\":\"" + String(dac2Ratio, 0) + "\"";
+    json += "\"dac1R\":\"" + String(dac1Ratio, 0) + "\",";
+    json += "\"dac2R\":\"" + String(dac2Ratio, 0) + "\",";
+    json += "\"ovL\":\"" + String(overloadLimit, 1) + "\",";
+    json += "\"recL\":\"" + String(recoveryLimit, 1) + "\"";
     json += "}";
     server.send(200, "application/json", json);
 }
@@ -502,13 +533,26 @@ void handleSetOutMode() {
     }
     server.send(200, "text/plain", "OK");
 }
-void handleSetDac2Ratio() {
-    if (server.hasArg("r")) {
-        dac2Ratio = server.arg("r").toFloat();
-        if (dac2Ratio < 0.0) dac2Ratio = 0.0;
-        if (dac2Ratio > 100.0) dac2Ratio = 100.0;
+void handleSetRatios() {
+    if (server.hasArg("r1") && server.hasArg("r2")) {
+        dac1Ratio = server.arg("r1").toFloat();
+        dac2Ratio = server.arg("r2").toFloat();
+        if (dac1Ratio < 0.0) dac1Ratio = 0.0; if (dac1Ratio > 100.0) dac1Ratio = 100.0;
+        if (dac2Ratio < 0.0) dac2Ratio = 0.0; if (dac2Ratio > 100.0) dac2Ratio = 100.0;
+        memory.putFloat("dac1Ratio", dac1Ratio);
         memory.putFloat("dac2Ratio", dac2Ratio);
-        Serial.printf("[SYS] Nowa proporcja DAC2: %.0f%%\n", dac2Ratio);
+        Serial.printf("[SYS] Nowe proporcje - DAC1: %.0f%% | DAC2: %.0f%%\n", dac1Ratio, dac2Ratio);
+        triggerBlink(1, 1000);
+    }
+    server.send(200, "text/plain", "OK");
+}
+void handleSetAlarms() {
+    if (server.hasArg("ov") && server.hasArg("rec")) {
+        overloadLimit = server.arg("ov").toFloat();
+        recoveryLimit = server.arg("rec").toFloat();
+        memory.putFloat("ovrLimit", overloadLimit);
+        memory.putFloat("recLimit", recoveryLimit);
+        Serial.printf("[SYS] Ustawienia Bezpieczenstwa - Odciecie: +%.1fA | Powrot: +%.1fA\n", overloadLimit, recoveryLimit);
         triggerBlink(1, 1000);
     }
     server.send(200, "text/plain", "OK");
@@ -594,20 +638,18 @@ void startRegulator() {
     trippedByOverload = false; 
     myNex.writeStr("pidonoff.txt", "ON"); 
     myPID.SetMode(MANUAL);          
-    Output = napiecieZadajnika;     
     
-    // Zabezpieczenie startowe
-    if (Output < currentMinDac) Output = currentMinDac;
-    if (Output > MAX_DAC_VOLTAGE) Output = MAX_DAC_VOLTAGE;
+    // Zabezpieczenie przed skrajnymi nastrojami ręcznymi
+    if (napiecieZadajnika < currentMinDac) Output = currentMinDac;
+    else if (napiecieZadajnika > MAX_DAC_VOLTAGE) Output = MAX_DAC_VOLTAGE;
+    else Output = napiecieZadajnika;
     
-    currentDac1 = Output;
-    currentDac2 = currentDac1 * (dac2Ratio / 100.0);
+    currentDac1 = Output * (dac1Ratio / 100.0);
+    currentDac2 = Output * (dac2Ratio / 100.0);
     
-    // Twardy Kaganiec
-    if (currentDac1 < 0.0) currentDac1 = 0.0;
-    if (currentDac1 > 10.0) currentDac1 = 10.0;
-    if (currentDac2 < 0.0) currentDac2 = 0.0;
-    if (currentDac2 > 10.0) currentDac2 = 10.0;
+    // Twardy Kaganiec - Ochrona przed zatrzymaniem falownika 4-20mA w trybie AUTO
+    if (currentDac1 < currentMinDac) currentDac1 = currentMinDac;
+    if (currentDac2 < currentMinDac) currentDac2 = currentMinDac;
 
     uint16_t mv_dac1 = (uint16_t)(currentDac1 * 1000.0);
     uint16_t mv_dac2 = (uint16_t)(currentDac2 * 1000.0);
@@ -708,7 +750,7 @@ void setup() {
 
     delay(2000); 
     Serial.begin(115200); 
-    Serial.println("\n\n--- SYSTEM V12.4 (Hard Clamp + Twardy Kaganiec) ---");
+    Serial.println("\n\n--- SYSTEM V12.5 (SCADA Level: Dual DAC Ratios + Dynamic Security) ---");
 
     WiFi.onEvent(onStationConnected, ARDUINO_EVENT_WIFI_AP_STACONNECTED);
 
@@ -721,13 +763,19 @@ void setup() {
     myPID.SetTunings(Kp, Ki, Kd); 
     
     outMode = memory.getInt("outMode", 0);
-    
-    // Zabezpieczenie odczytu proporcji z EEPROM
-    dac2Ratio = memory.getFloat("dac2Ratio", 90.0);
-    if (isnan(dac2Ratio) || dac2Ratio < 0.0) dac2Ratio = 0.0;
-    if (dac2Ratio > 100.0) dac2Ratio = 100.0;
-    
     applyOutputMode();
+
+    // Odczyt proporcji DAC z EEPROM
+    dac1Ratio = memory.getFloat("dac1Ratio", 100.0);
+    dac2Ratio = memory.getFloat("dac2Ratio", 90.0);
+    if (isnan(dac1Ratio) || dac1Ratio < 0.0) dac1Ratio = 0.0; if (dac1Ratio > 100.0) dac1Ratio = 100.0;
+    if (isnan(dac2Ratio) || dac2Ratio < 0.0) dac2Ratio = 0.0; if (dac2Ratio > 100.0) dac2Ratio = 100.0;
+
+    // Odczyt progow bezpieczenstwa z EEPROM
+    overloadLimit = memory.getFloat("ovrLimit", 7.0);
+    recoveryLimit = memory.getFloat("recLimit", 2.0);
+    if (isnan(overloadLimit) || overloadLimit < 0.0) overloadLimit = 7.0;
+    if (isnan(recoveryLimit) || recoveryLimit < 0.0) recoveryLimit = 2.0;
 
     server.on("/", HTTP_GET, handleRoot);
     server.on("/api/data", HTTP_GET, handleApiData);
@@ -735,7 +783,8 @@ void setup() {
     server.on("/api/toggle_mode", HTTP_POST, handleToggleMode);
     server.on("/api/set_limits", HTTP_POST, handleSetLimits);
     server.on("/api/set_outmode", HTTP_POST, handleSetOutMode);
-    server.on("/api/set_dac2_ratio", HTTP_POST, handleSetDac2Ratio);
+    server.on("/api/set_ratios", HTTP_POST, handleSetRatios);
+    server.on("/api/set_alarms", HTTP_POST, handleSetAlarms);
     server.on("/api/set_pid", HTTP_POST, handleSetPID);
     server.on("/api/sd_list", HTTP_GET, handleSDList);
     server.on("/sd_read", HTTP_GET, handleSDRead);
@@ -782,8 +831,8 @@ void setup() {
     
     Serial.println("SYSTEM GOTOWY - Odpal Monitor Szeregowy!");
     triggerBlink(2, 500); 
-
-    // ODPALENIE WIFI AUTOMATYCZNIE PO STARCIE
+    
+    // AUTOMATYCZNE URUCHOMIENIE WIFI
     toggleWiFi();
 }
 
@@ -845,15 +894,19 @@ void loop() {
         }
 
         if (!systemON) {
-            currentDac1 = napiecieZadajnika;
-            currentDac2 = currentDac1 * (dac2Ratio / 100.0); 
+            currentDac1 = napiecieZadajnika * (dac1Ratio / 100.0);
+            currentDac2 = napiecieZadajnika * (dac2Ratio / 100.0); 
         } else {
             if (isnan(Output)) Output = currentMinDac; 
-            currentDac1 = Output;             
-            currentDac2 = currentDac1 * (dac2Ratio / 100.0); 
+            currentDac1 = Output * (dac1Ratio / 100.0);             
+            currentDac2 = Output * (dac2Ratio / 100.0); 
+            
+            // TWARDY KAGANIEC (Ochrona dolna w trybie AUTO)
+            if (currentDac1 < currentMinDac) currentDac1 = currentMinDac;
+            if (currentDac2 < currentMinDac) currentDac2 = currentMinDac;
         }
 
-        // --- TWARDY KAGANIEC (Ochrona przed wybuchem DAC) ---
+        // TWARDY KAGANIEC (Ochrona ABSOLUTNA przed przepelnieniem bitowym ujemnym lub ponad 10V)
         if (currentDac1 < 0.0) currentDac1 = 0.0;
         if (currentDac1 > 10.0) currentDac1 = 10.0;
         if (currentDac2 < 0.0) currentDac2 = 0.0;
@@ -876,35 +929,36 @@ void loop() {
             i = (pot_raw / 4095.0) * 50.0; 
         }
         
-        // Delikatny filtr uśredniający prąd z maszyny
+        // Filtr uśredniający prąd (EMA)
         if (current_Amps == 0.0) {
             current_Amps = i;
         } else {
             current_Amps = (i * 0.4) + (current_Amps * 0.6); 
         }
         
-        if (systemON && current_Amps >= (maxLimit + 7.0)) {
-            Serial.println("[ALARM] Przekroczono limit +7A! Awaryjne rozlaczenie!");
+        // Zabezpieczenie Overload uzywajace zmiennej z WebUI
+        if (systemON && current_Amps >= (maxLimit + overloadLimit)) {
+            Serial.printf("[ALARM] Przekroczono limit +%.1fA! Awaryjne rozlaczenie!\n", overloadLimit);
             stopRegulator();
             trippedByOverload = true;
         }
 
+        // Powrot uzywajacy zmiennej z WebUI
         if (!systemON && trippedByOverload && modeAUTO) {
-            if (current_Amps <= (minLimit + 2.0)) {
-                Serial.println("[AUTO] Prad wrocil do normy. Odpalam maszyne ponownie.");
+            if (current_Amps <= (minLimit + recoveryLimit)) {
+                Serial.printf("[AUTO] Prad zmalal o +%.1fA. Odpalam maszyne ponownie.\n", recoveryLimit);
                 startRegulator(); 
             }
         }
 
         if (systemON) {
-            // Odtworzona inteligentna Strefa Martwa (Window Control)
             float margines = (maxLimit - minLimit) * 0.15; 
             if (current_Amps > (maxLimit - margines)) {
                 Setpoint = maxLimit - margines;
             } else if (current_Amps < (minLimit + margines)) {
                 Setpoint = minLimit + margines;
             } else {
-                Setpoint = current_Amps; // Zamraża PID - brak błędu
+                Setpoint = current_Amps; 
             }
 
             Input = current_Amps;         
