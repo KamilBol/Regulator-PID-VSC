@@ -63,6 +63,10 @@ int outMode = 0;
 float currentMinDac = 3.5; 
 const float MAX_DAC_VOLTAGE = 10.0;
 
+// --- ZMIENNE KALIBRACYJNE (OFFSET) ---
+float dac1Calib = 0.0;
+float dac2Calib = 0.0;
+
 // ================================================================
 // ZMIENNE GLOBALNE
 // ================================================================
@@ -115,7 +119,8 @@ int blinkDuration = 100;
 bool statusDAC = false;
 bool statusADS = false;
 bool statusSD = false;
-bool statusPZEM = false; // Zabezpieczony status PZEM-a przed filtrem zerowym
+bool statusPZEM = false;
+unsigned long lastNextionResponseTime = 0;
 
 // Bufor danych
 float pzem_u = 0, pzem_p = 0, pzem_pf = 0, pzem_s = 0, pzem_q = 0;
@@ -176,7 +181,7 @@ void initSD() {
         statusSD = true;
         File f = SD.open("/AI_LOG.txt", FILE_APPEND); 
         if(f) {
-            f.println("=== START SYSTEMU - V12.7 ==="); 
+            f.println("=== START SYSTEMU - V12.8 ==="); 
             f.close(); 
         }
         Serial.println("[SD] Karta aktywna.");
@@ -236,11 +241,10 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     #prog-bar { width: 0%; height: 20px; background: var(--green); border-radius: 5px; text-align: center; color: white; line-height: 20px; font-size: 12px;}
     .badge-ok { color: var(--green); font-weight: bold; text-shadow: 0 0 5px rgba(76, 175, 80, 0.5); }
     .badge-err { color: var(--red); font-weight: bold; text-shadow: 0 0 5px rgba(244, 67, 54, 0.5); }
-    .badge-warn { color: var(--orange); font-weight: bold; }
   </style>
 </head>
 <body>
-  <div class="header"><h1>⚙️ Granulator Pro V12.7</h1></div>
+  <div class="header"><h1>⚙️ Granulator Pro V12.8</h1></div>
   
   <div class="nav">
     <button class="tablinks active" onclick="openTab(event, 'Panel')">📊 Panel</button>
@@ -291,6 +295,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         <button type="submit" class="submit-btn">ZAPISZ WIDEŁKI</button>
       </form>
     </div>
+    
     <div class="card">
       <h3 style="margin-top:0; color:var(--orange);">2. Proporcje Falowników (0-100%)</h3>
       <form onsubmit="saveRatios(event)">
@@ -301,6 +306,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         <button type="submit" class="submit-btn" style="background:var(--orange); color:#fff;">ZAPISZ PROPORCJE</button>
       </form>
     </div>
+
     <div class="card">
       <h3 style="margin-top:0;">3. Strojenie Algorytmu PID</h3>
       <form onsubmit="savePID(event)">
@@ -313,6 +319,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         <button type="submit" class="submit-btn" style="background:#555; color:#fff;">ZAPISZ PID</button>
       </form>
     </div>
+
     <div class="card">
       <h3 style="margin-top:0; color:var(--green);">4. Ustawienia Bezpieczeństwa (Odcięcia)</h3>
       <form onsubmit="saveAlarms(event)">
@@ -323,8 +330,9 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         <button type="submit" class="submit-btn" style="background:var(--green); color:#fff;">ZAPISZ ALARMY</button>
       </form>
     </div>
+
     <div class="card">
-      <h3 style="margin-top:0; color:var(--purple);">5. Konfiguracja Sygnału (Raz przy montażu)</h3>
+      <h3 style="margin-top:0; color:var(--purple);">5. Konfiguracja Sygnału (Hardware)</h3>
       <form onsubmit="saveOutMode(event)">
         <label>Wybierz typ falowników na obiekcie:</label>
         <select id="outMode">
@@ -335,13 +343,24 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         <button type="submit" class="submit-btn" style="background:var(--purple); color:#fff;">ZAPISZ PROFIL FALOWNIKA</button>
       </form>
     </div>
+
+    <div class="card">
+      <h3 style="margin-top:0; color:#00bcd4;">6. Kalibracja Napięcia DAC (Offset)</h3>
+      <form onsubmit="saveCalib(event)">
+        <label>Korekta DAC 1 [Volty] (np. -0.15 lub 0.20)</label>
+        <input type="number" step="0.01" id="dac1c" required>
+        <label>Korekta DAC 2 [Volty] (np. -0.15 lub 0.20)</label>
+        <input type="number" step="0.01" id="dac2c" required>
+        <button type="submit" class="submit-btn" style="background:#00bcd4; color:#000;">ZAPISZ KALIBRACJĘ</button>
+      </form>
+    </div>
   </div>
 
   <div id="SD" class="tab-content">
     <div class="card">
       <h3 style="margin-top:0; color:#00bcd4;">🩺 Status Sprzętu (Na Żywo)</h3>
       <div class="row"><span>Zasilanie (PZEM-004T):</span> <span id="st_pzem" class="badge-err">ŁADOWANIE</span></div>
-      <div class="row"><span>Ekran HMI (Nextion):</span> <span id="st_nex" class="badge-ok">UART AKTYWNY</span></div>
+      <div class="row"><span>Ekran HMI (Nextion):</span> <span id="st_nex" class="badge-err">ŁADOWANIE</span></div>
       <div class="row"><span>Zadajnik (ADS1115):</span> <span id="st_ads" class="badge-err">ŁADOWANIE</span></div>
       <div class="row"><span>Falowniki (GP8403):</span> <span id="st_dac" class="badge-err">ŁADOWANIE</span></div>
       <div class="row"><span>Izolator I2C (ISO1540):</span> <span id="st_iso" class="badge-err">ŁADOWANIE</span></div>
@@ -415,33 +434,32 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         if(!document.getElementById('kp').value) document.getElementById('kp').value = data.kp;
         if(!document.getElementById('ki').value) document.getElementById('ki').value = data.ki;
         if(!document.getElementById('kd').value) document.getElementById('kd').value = data.kd;
+        if(!document.getElementById('dac1c').value) document.getElementById('dac1c').value = data.dac1C;
+        if(!document.getElementById('dac2c').value) document.getElementById('dac2c').value = data.dac2C;
       });
     }, 1000);
 
-    // Diagnostyka
     setInterval(function() {
       fetch('/api/health').then(res => res.json()).then(data => {
-        function setSt(id, st) {
+        function setSt(id, st, failText) {
           let el = document.getElementById(id);
           if (st === "1") { el.innerText = "ONLINE"; el.className = "badge-ok"; } 
-          else { el.innerText = "BŁĄD / OFFLINE"; el.className = "badge-err"; }
+          else { el.innerText = failText; el.className = "badge-err"; }
         }
-        setSt('st_pzem', data.pzem);
-        setSt('st_ads', data.ads);
-        setSt('st_dac', data.dac);
-        setSt('st_dht', data.dht);
-        setSt('st_sd', data.sd);
+        setSt('st_pzem', data.pzem, "BŁĄD / OFFLINE");
+        setSt('st_nex', data.nex, "BŁĄD / BRAK UART");
+        setSt('st_ads', data.ads, "BŁĄD / OFFLINE");
+        setSt('st_dac', data.dac, "BŁĄD / OFFLINE");
+        setSt('st_dht', data.dht, "BŁĄD / OFFLINE");
+        setSt('st_sd', data.sd, "BŁĄD / OFFLINE");
 
-        // Dedukcja statusu Izolatora ISO1540
         let el_iso = document.getElementById('st_iso');
         if (data.dac === "1" || data.ads === "1") {
-            el_iso.innerText = "ONLINE (Mostek OK)";
-            el_iso.className = "badge-ok";
+            el_iso.innerText = "ONLINE (Mostek OK)"; el_iso.className = "badge-ok";
         } else {
-            el_iso.innerText = "BŁĄD / BRAK I2C";
-            el_iso.className = "badge-err";
+            el_iso.innerText = "BŁĄD / BRAK I2C"; el_iso.className = "badge-err";
         }
-      }).catch(err => console.log("Brak API"));
+      }).catch(err => console.log("Brak API Diagnostyki"));
     }, 2000);
 
     function toggleSys() { fetch('/api/toggle_sys', {method: 'POST'}); }
@@ -465,6 +483,10 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     function savePID(e) {
       e.preventDefault();
       fetch('/api/set_pid?kp='+document.getElementById('kp').value+'&ki='+document.getElementById('ki').value+'&kd='+document.getElementById('kd').value, {method: 'POST'}).then(() => alert("PID zapisany!"));
+    }
+    function saveCalib(e) {
+      e.preventDefault();
+      fetch('/api/set_calib?c1='+document.getElementById('dac1c').value+'&c2='+document.getElementById('dac2c').value, {method: 'POST'}).then(() => alert("Kalibracja zapisana!"));
     }
 
     function loadSD() {
@@ -543,18 +565,22 @@ void handleApiData() {
     json += "\"dac1R\":\"" + String(dac1Ratio, 0) + "\",";
     json += "\"dac2R\":\"" + String(dac2Ratio, 0) + "\",";
     json += "\"ovL\":\"" + String(overloadLimit, 1) + "\",";
-    json += "\"recL\":\"" + String(recoveryLimit, 1) + "\"";
+    json += "\"recL\":\"" + String(recoveryLimit, 1) + "\",";
+    json += "\"dac1C\":\"" + String(dac1Calib, 2) + "\",";
+    json += "\"dac2C\":\"" + String(dac2Calib, 2) + "\"";
     json += "}";
     server.send(200, "application/json", json);
 }
 
 void handleApiHealth() {
+    bool statusNex = (millis() - lastNextionResponseTime < 5000); 
     String json = "{";
     json += "\"pzem\":\"" + String(statusPZEM ? 1 : 0) + "\",";
     json += "\"dac\":\"" + String(statusDAC ? 1 : 0) + "\",";
     json += "\"ads\":\"" + String(statusADS ? 1 : 0) + "\",";
     json += "\"dht\":\"" + String(!isnan(dht_t) ? 1 : 0) + "\",";
-    json += "\"sd\":\"" + String(statusSD ? 1 : 0) + "\"";
+    json += "\"sd\":\"" + String(statusSD ? 1 : 0) + "\",";
+    json += "\"nex\":\"" + String(statusNex ? 1 : 0) + "\"";
     json += "}";
     server.send(200, "application/json", json);
 }
@@ -584,7 +610,6 @@ void handleSetRatios() {
         if (dac2Ratio < 0.0) dac2Ratio = 0.0; if (dac2Ratio > 100.0) dac2Ratio = 100.0;
         memory.putFloat("dac1Ratio", dac1Ratio);
         memory.putFloat("dac2Ratio", dac2Ratio);
-        Serial.printf("[SYS] Nowe proporcje - DAC1: %.0f%% | DAC2: %.0f%%\n", dac1Ratio, dac2Ratio);
         triggerBlink(1, 1000);
     }
     server.send(200, "text/plain", "OK");
@@ -595,7 +620,6 @@ void handleSetAlarms() {
         recoveryLimit = server.arg("rec").toFloat();
         memory.putFloat("ovrLimit", overloadLimit);
         memory.putFloat("recLimit", recoveryLimit);
-        Serial.printf("[SYS] Bezpieczenstwo - Odciecie: +%.1fA | Powrot: +%.1fA\n", overloadLimit, recoveryLimit);
         triggerBlink(1, 1000);
     }
     server.send(200, "text/plain", "OK");
@@ -624,6 +648,18 @@ void handleSetPID() {
     }
     server.send(200, "text/plain", "OK");
 }
+void handleSetCalib() {
+    if (server.hasArg("c1") && server.hasArg("c2")) {
+        dac1Calib = server.arg("c1").toFloat();
+        dac2Calib = server.arg("c2").toFloat();
+        memory.putFloat("dac1Calib", dac1Calib);
+        memory.putFloat("dac2Calib", dac2Calib);
+        Serial.printf("[SYS] Kalibracja DAC zapisana: DAC1 = %+.2fV, DAC2 = %+.2fV\n", dac1Calib, dac2Calib);
+        triggerBlink(1, 1000);
+    }
+    server.send(200, "text/plain", "OK");
+}
+
 void handleSDList() {
     if(SD.cardType() == CARD_NONE) { server.send(200, "application/json", "[]"); return; }
     File root = SD.open("/");
@@ -666,6 +702,7 @@ void toggleWiFi() {
         server.on("/api/set_ratios", HTTP_POST, handleSetRatios);
         server.on("/api/set_alarms", HTTP_POST, handleSetAlarms);
         server.on("/api/set_pid", HTTP_POST, handleSetPID);
+        server.on("/api/set_calib", HTTP_POST, handleSetCalib);
         server.on("/api/sd_list", HTTP_GET, handleSDList);
         server.on("/sd_read", HTTP_GET, handleSDRead);
         
@@ -714,8 +751,16 @@ void startRegulator() {
     if (currentDac1 < currentMinDac) currentDac1 = currentMinDac;
     if (currentDac2 < currentMinDac) currentDac2 = currentMinDac;
 
-    uint16_t mv_dac1 = (uint16_t)(currentDac1 * 1000.0);
-    uint16_t mv_dac2 = (uint16_t)(currentDac2 * 1000.0);
+    // Aplikacja Offsetu Kalibracyjnego (Fizyczna zmiana prądu)
+    float finalDac1 = currentDac1 + dac1Calib;
+    float finalDac2 = currentDac2 + dac2Calib;
+    if (finalDac1 < 0.0) finalDac1 = 0.0;
+    if (finalDac1 > 10.0) finalDac1 = 10.0;
+    if (finalDac2 < 0.0) finalDac2 = 0.0;
+    if (finalDac2 > 10.0) finalDac2 = 10.0;
+
+    uint16_t mv_dac1 = (uint16_t)(finalDac1 * 1000.0);
+    uint16_t mv_dac2 = (uint16_t)(finalDac2 * 1000.0);
     dac.setDACOutVoltage(mv_dac1, 0); 
     dac.setDACOutVoltage(mv_dac2, 1);
     delay(50); 
@@ -756,6 +801,8 @@ bool isButtonHeld = false;
 void handleNextionInput() {
     while (NextionSerial.available()) { 
         byte b = NextionSerial.read();  
+        lastNextionResponseTime = millis(); // REJESTRACJA ZYCIA EKRANU (Zabezpieczenie Diagnostyki)
+        
         if (b == 0x65) {                
             delay(5);                   
             if (NextionSerial.available() >= 3) {
@@ -813,7 +860,7 @@ void setup() {
 
     delay(2000); 
     Serial.begin(115200); 
-    Serial.println("\n\n--- SYSTEM V12.7 (ZAAWANSOWANA DIAGNOSTYKA) ---");
+    Serial.println("\n\n--- SYSTEM V12.8 (Offset Kalibracji + Asynchroniczny Ping Nextion) ---");
 
     // 1. ZALADOWANIE PAMIECI
     memory.begin("regulator", false); 
@@ -836,6 +883,12 @@ void setup() {
     recoveryLimit = memory.getFloat("recLimit", 2.0);
     if (isnan(overloadLimit) || overloadLimit < 0.0) overloadLimit = 7.0;
     if (isnan(recoveryLimit) || recoveryLimit < 0.0) recoveryLimit = 2.0;
+
+    // Odczyt kalibracji błędu zera (Offset DAC)
+    dac1Calib = memory.getFloat("dac1Calib", 0.0);
+    dac2Calib = memory.getFloat("dac2Calib", 0.0);
+    if (isnan(dac1Calib)) dac1Calib = 0.0;
+    if (isnan(dac2Calib)) dac2Calib = 0.0;
 
     // 2. NATYCHMIASTOWY START WIFI 
     WiFi.onEvent(onStationConnected, ARDUINO_EVENT_WIFI_AP_STACONNECTED);
@@ -925,9 +978,14 @@ void loop() {
         
         statusSD = (SD.cardType() != CARD_NONE);
 
-        // DIAGNOSTYKA PZEM: Czyta wartosc, by zlapac ewentualne NaN PRZED wlaczeniem filtra w petli 1000ms
         float diag_u = pzem.voltage();
         statusPZEM = !isnan(diag_u);
+
+        // Ping Asynchroniczny do Nextiona (Prosba o wyslanie strony w celu weryfikacji zycia)
+        NextionSerial.print("sendme");
+        NextionSerial.write(0xFF);
+        NextionSerial.write(0xFF);
+        NextionSerial.write(0xFF);
     }
 
     // --- SZYBKA PĘTLA (50ms - Napięcia) ---
@@ -961,14 +1019,18 @@ void loop() {
             if (currentDac2 < currentMinDac) currentDac2 = currentMinDac;
         }
 
-        if (currentDac1 < 0.0) currentDac1 = 0.0;
-        if (currentDac1 > 10.0) currentDac1 = 10.0;
-        if (currentDac2 < 0.0) currentDac2 = 0.0;
-        if (currentDac2 > 10.0) currentDac2 = 10.0;
+        // APLIKACJA OFFSETU KALIBRACYJNEGO 
+        float finalDac1 = currentDac1 + dac1Calib;
+        float finalDac2 = currentDac2 + dac2Calib;
+
+        if (finalDac1 < 0.0) finalDac1 = 0.0;
+        if (finalDac1 > 10.0) finalDac1 = 10.0;
+        if (finalDac2 < 0.0) finalDac2 = 0.0;
+        if (finalDac2 > 10.0) finalDac2 = 10.0;
 
         if(statusDAC) {
-            uint16_t mv_dac1 = (uint16_t)(currentDac1 * 1000.0);
-            uint16_t mv_dac2 = (uint16_t)(currentDac2 * 1000.0);
+            uint16_t mv_dac1 = (uint16_t)(finalDac1 * 1000.0);
+            uint16_t mv_dac2 = (uint16_t)(finalDac2 * 1000.0);
             dac.setDACOutVoltage(mv_dac1, 0); 
             dac.setDACOutVoltage(mv_dac2, 1);
         }
@@ -1053,6 +1115,7 @@ void loop() {
             myNex.writeStr("wilgotnosc.txt", String(dht_h, 0));
         }
 
+        // Na ekran wysyłamy wartości IDEALNE (bez ukrytego offsetu kalibracyjnego)
         char dacBuf[10];
         sprintf(dacBuf, "%.2f V", currentDac1); myNex.writeStr("pod1.txt", dacBuf); myNex.writeStr("dac1.txt", dacBuf);
         sprintf(dacBuf, "%.2f V", currentDac2); myNex.writeStr("pod2.txt", dacBuf); myNex.writeStr("dac2.txt", dacBuf);
