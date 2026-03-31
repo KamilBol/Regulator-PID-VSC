@@ -61,7 +61,7 @@ PID myPID(&Input, &Output, &Setpoint, Kp, Ki, Kd, DIRECT);
 // --- ZMIENNE KONFIGURACJI SPRZĘTOWEJ ---
 int outMode = 0; 
 float currentMinDac = 3.5; 
-const float MAX_DAC_VOLTAGE = 10.0;
+float currentMaxDac = 10.0; // INTELIGENTNY SUFIT
 
 // --- ZMIENNE KALIBRACYJNE (OFFSET) ---
 float dac1Calib = 0.0;
@@ -181,7 +181,7 @@ void initSD() {
         statusSD = true;
         File f = SD.open("/AI_LOG.txt", FILE_APPEND); 
         if(f) {
-            f.println("=== START SYSTEMU - V12.8 ==="); 
+            f.println("=== START SYSTEMU - V12.9 ==="); 
             f.close(); 
         }
         Serial.println("[SD] Karta aktywna.");
@@ -193,14 +193,22 @@ void initSD() {
 }
 
 void applyOutputMode() {
-    if (outMode == 0 || outMode == 1) {
+    if (outMode == 0) {
+        // Bezpośrednio falownik 0-10V
         currentMinDac = 3.5;
+        currentMaxDac = 10.0;
+    } else if (outMode == 1) {
+        // Modul Zewnetrzny 0-5V -> 4-20mA (17.5Hz to 35% z 5V = 1.75V)
+        currentMinDac = 1.75;
+        currentMaxDac = 5.0;
     } else if (outMode == 2) {
-        currentMinDac = 4.8;
+        // Modul Zewnetrzny 0-10V -> 4-20mA (17.5Hz to 35% z 10V = 3.5V)
+        currentMinDac = 3.5;
+        currentMaxDac = 10.0;
     }
-    myPID.SetOutputLimits(currentMinDac, MAX_DAC_VOLTAGE);
+    myPID.SetOutputLimits(currentMinDac, currentMaxDac);
     memory.putInt("outMode", outMode);
-    Serial.printf("[SYS] Konfiguracja: Tryb %d | Podloga PID: %.2fV\n", outMode, currentMinDac);
+    Serial.printf("[SYS] Konfiguracja: Tryb %d | Podloga: %.2fV | Sufit: %.2fV\n", outMode, currentMinDac, currentMaxDac);
 }
 
 // ================================================================
@@ -244,7 +252,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   </style>
 </head>
 <body>
-  <div class="header"><h1>⚙️ Granulator Pro V12.8</h1></div>
+  <div class="header"><h1>⚙️ Granulator Pro V12.9</h1></div>
   
   <div class="nav">
     <button class="tablinks active" onclick="openTab(event, 'Panel')">📊 Panel</button>
@@ -336,9 +344,9 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       <form onsubmit="saveOutMode(event)">
         <label>Wybierz typ falowników na obiekcie:</label>
         <select id="outMode">
-          <option value="0">Napięciowe 0 - 10V</option>
-          <option value="1">Prądowe 0 - 20mA (Moduł zewnętrzny)</option>
-          <option value="2">Prądowe 4 - 20mA (Moduł zewnętrzny)</option>
+          <option value="0">Napięciowy bezpośredni 0 - 10V</option>
+          <option value="1">Moduł Prądowy (Zakupiony 0-5V na 4-20mA)</option>
+          <option value="2">Moduł Prądowy (Standardowy 0-10V na 4-20mA)</option>
         </select>
         <button type="submit" class="submit-btn" style="background:var(--purple); color:#fff;">ZAPISZ PROFIL FALOWNIKA</button>
       </form>
@@ -742,7 +750,7 @@ void startRegulator() {
     myPID.SetMode(MANUAL);          
     
     if (napiecieZadajnika < currentMinDac) Output = currentMinDac;
-    else if (napiecieZadajnika > MAX_DAC_VOLTAGE) Output = MAX_DAC_VOLTAGE;
+    else if (napiecieZadajnika > currentMaxDac) Output = currentMaxDac;
     else Output = napiecieZadajnika;
     
     currentDac1 = Output * (dac1Ratio / 100.0);
@@ -751,13 +759,15 @@ void startRegulator() {
     if (currentDac1 < currentMinDac) currentDac1 = currentMinDac;
     if (currentDac2 < currentMinDac) currentDac2 = currentMinDac;
 
-    // Aplikacja Offsetu Kalibracyjnego (Fizyczna zmiana prądu)
+    // Aplikacja Offsetu Kalibracyjnego
     float finalDac1 = currentDac1 + dac1Calib;
     float finalDac2 = currentDac2 + dac2Calib;
+    
+    // Twardy programowy kaganiec inteligentny
     if (finalDac1 < 0.0) finalDac1 = 0.0;
-    if (finalDac1 > 10.0) finalDac1 = 10.0;
+    if (finalDac1 > currentMaxDac) finalDac1 = currentMaxDac;
     if (finalDac2 < 0.0) finalDac2 = 0.0;
-    if (finalDac2 > 10.0) finalDac2 = 10.0;
+    if (finalDac2 > currentMaxDac) finalDac2 = currentMaxDac;
 
     uint16_t mv_dac1 = (uint16_t)(finalDac1 * 1000.0);
     uint16_t mv_dac2 = (uint16_t)(finalDac2 * 1000.0);
@@ -801,7 +811,7 @@ bool isButtonHeld = false;
 void handleNextionInput() {
     while (NextionSerial.available()) { 
         byte b = NextionSerial.read();  
-        lastNextionResponseTime = millis(); // REJESTRACJA ZYCIA EKRANU (Zabezpieczenie Diagnostyki)
+        lastNextionResponseTime = millis(); // REJESTRACJA ZYCIA EKRANU 
         
         if (b == 0x65) {                
             delay(5);                   
@@ -860,7 +870,7 @@ void setup() {
 
     delay(2000); 
     Serial.begin(115200); 
-    Serial.println("\n\n--- SYSTEM V12.8 (Offset Kalibracji + Asynchroniczny Ping Nextion) ---");
+    Serial.println("\n\n--- SYSTEM V12.9 (Uniwersalny Modul Hardware z Inteligentnym Sufitem) ---");
 
     // 1. ZALADOWANIE PAMIECI
     memory.begin("regulator", false); 
@@ -872,7 +882,7 @@ void setup() {
     myPID.SetTunings(Kp, Ki, Kd); 
     
     outMode = memory.getInt("outMode", 0);
-    applyOutputMode();
+    applyOutputMode(); // Tutaj aplikowany jest od razu bezpieczny sufit (np. 5.0V)
 
     dac1Ratio = memory.getFloat("dac1Ratio", 100.0);
     dac2Ratio = memory.getFloat("dac2Ratio", 90.0);
@@ -884,7 +894,6 @@ void setup() {
     if (isnan(overloadLimit) || overloadLimit < 0.0) overloadLimit = 7.0;
     if (isnan(recoveryLimit) || recoveryLimit < 0.0) recoveryLimit = 2.0;
 
-    // Odczyt kalibracji błędu zera (Offset DAC)
     dac1Calib = memory.getFloat("dac1Calib", 0.0);
     dac2Calib = memory.getFloat("dac2Calib", 0.0);
     if (isnan(dac1Calib)) dac1Calib = 0.0;
@@ -910,7 +919,7 @@ void setup() {
     statusDAC = (Wire.endTransmission() == 0);
     if(statusDAC) {
         dac.begin();
-        dac.setDACOutRange(dac.eOutputRange10V); 
+        dac.setDACOutRange(dac.eOutputRange10V); // FIZYCZNIE 0-10V JEST ZAWSZE AKTYWNE
         dac.setDACOutVoltage(0, 0);              
         dac.setDACOutVoltage(0, 1);              
     }
@@ -981,7 +990,7 @@ void loop() {
         float diag_u = pzem.voltage();
         statusPZEM = !isnan(diag_u);
 
-        // Ping Asynchroniczny do Nextiona (Prosba o wyslanie strony w celu weryfikacji zycia)
+        // Ping Asynchroniczny do Nextiona 
         NextionSerial.print("sendme");
         NextionSerial.write(0xFF);
         NextionSerial.write(0xFF);
@@ -1023,10 +1032,11 @@ void loop() {
         float finalDac1 = currentDac1 + dac1Calib;
         float finalDac2 = currentDac2 + dac2Calib;
 
+        // INTELIGENTNY SUFIT ZABEZPIECZAJĄCY MODUŁ
         if (finalDac1 < 0.0) finalDac1 = 0.0;
-        if (finalDac1 > 10.0) finalDac1 = 10.0;
+        if (finalDac1 > currentMaxDac) finalDac1 = currentMaxDac;
         if (finalDac2 < 0.0) finalDac2 = 0.0;
-        if (finalDac2 > 10.0) finalDac2 = 10.0;
+        if (finalDac2 > currentMaxDac) finalDac2 = currentMaxDac;
 
         if(statusDAC) {
             uint16_t mv_dac1 = (uint16_t)(finalDac1 * 1000.0);
