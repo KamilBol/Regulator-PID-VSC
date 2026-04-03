@@ -61,7 +61,7 @@ PID myPID(&Input, &Output, &Setpoint, Kp, Ki, Kd, DIRECT);
 // --- ZMIENNE KONFIGURACJI SPRZĘTOWEJ ---
 int outMode = 0; 
 float minDacVolt = 3.5; // RĘCZNA PODŁOGA NAPIĘCIA DAC
-float currentMaxDac = 10.0; // INTELIGENTNY SUFIT
+float maxDacVolt = 10.0; // RĘCZNY SUFIT NAPIĘCIA DAC
 
 // --- ZMIENNE KALIBRACYJNE (OFFSET) ---
 float dac1Calib = 0.0;
@@ -181,7 +181,7 @@ void initSD() {
         statusSD = true;
         File f = SD.open("/AI_LOG.txt", FILE_APPEND); 
         if(f) {
-            f.println("=== START SYSTEMU - V13.3_ULTIMATE_FLOOR ==="); 
+            f.println("=== START SYSTEMU - V13.4_FULL_CLAMP ==="); 
             f.close(); 
         }
         Serial.println("[SD] Karta aktywna.");
@@ -193,12 +193,11 @@ void initSD() {
 }
 
 void applyOutputMode() {
-    // W tej wersji outMode nie nadpisuje juz twardo podlogi.
-    // Podloga jest wylacznie w rekach uzytkownika (zmienna minDacVolt).
-    currentMaxDac = 10.0;
-    myPID.SetOutputLimits(minDacVolt, currentMaxDac);
+    // Profil tylko informacyjny do UI. 
+    // Limity steruje bezpośrednio użytkownik z poziomu WebUI!
+    myPID.SetOutputLimits(minDacVolt, maxDacVolt);
     memory.putInt("outMode", outMode);
-    Serial.printf("[SYS] Konfiguracja: Tryb %d | Reczna Podloga: %.2fV | Sufit: %.2fV\n", outMode, minDacVolt, currentMaxDac);
+    Serial.printf("[SYS] Konfiguracja: Tryb %d | Podloga: %.2fV | Sufit: %.2fV\n", outMode, minDacVolt, maxDacVolt);
 }
 
 // ================================================================
@@ -242,7 +241,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   </style>
 </head>
 <body>
-  <div class="header"><h1>⚙️ Granulator Pro V13.3</h1></div>
+  <div class="header"><h1>⚙️ Granulator Pro V13.4</h1></div>
   
   <div class="nav">
     <button class="tablinks active" onclick="openTab(event, 'Panel')">📊 Panel</button>
@@ -330,11 +329,13 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     </div>
 
     <div class="card">
-      <h3 style="margin-top:0; color:var(--pink);">5. Ochrona Falownika (Podłoga Napięcia)</h3>
-      <form onsubmit="saveMinVolt(event)">
-        <label>Sztywny limit w Voltach, poniżej którego DAC nigdy nie zejdzie (np. wpisz 3.5 dla 17.5 Hz, lub 2.0 dla bazowych 4mA)</label>
+      <h3 style="margin-top:0; color:var(--pink);">5. Ochrona Falownika (Limity Napięcia DAC)</h3>
+      <form onsubmit="saveVoltLimits(event)">
+        <label>Dolna podłoga napięcia [V] (Poniżej której falownik nie zejdzie. Np. 3.5V lub 2.0V dla 4mA)</label>
         <input type="number" step="0.01" id="minV" required>
-        <button type="submit" class="submit-btn" style="background:var(--pink); color:#fff;">ZAPISZ PODŁOGĘ NAPIĘCIA</button>
+        <label>Górny sufit napięcia [V] (Maksymalny gaz falownika. Domyślnie: 10.0V)</label>
+        <input type="number" step="0.01" id="maxV" required>
+        <button type="submit" class="submit-btn" style="background:var(--pink); color:#fff;">ZAPISZ LIMITY NAPIĘCIA</button>
       </form>
     </div>
 
@@ -444,6 +445,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         if(!document.getElementById('dac1c').value) document.getElementById('dac1c').value = data.dac1C;
         if(!document.getElementById('dac2c').value) document.getElementById('dac2c').value = data.dac2C;
         if(!document.getElementById('minV').value) document.getElementById('minV').value = data.minV;
+        if(!document.getElementById('maxV').value) document.getElementById('maxV').value = data.maxV;
       });
     }, 1000);
 
@@ -496,9 +498,11 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       e.preventDefault();
       fetch('/api/set_calib?c1='+document.getElementById('dac1c').value+'&c2='+document.getElementById('dac2c').value, {method: 'POST'}).then(() => alert("Kalibracja zapisana!"));
     }
-    function saveMinVolt(e) {
+    function saveVoltLimits(e) {
       e.preventDefault();
-      fetch('/api/set_min_volt?v='+document.getElementById('minV').value, {method: 'POST'}).then(() => alert("Sztywna podłoga napięcia zaktualizowana!"));
+      let min = document.getElementById('minV').value;
+      let max = document.getElementById('maxV').value;
+      fetch('/api/set_volt_limits?min='+min+'&max='+max, {method: 'POST'}).then(() => alert("Limity napięcia zaktualizowane pomyślnie!"));
     }
 
     function loadSD() {
@@ -580,7 +584,8 @@ void handleApiData() {
     json += "\"recL\":\"" + String(recoveryLimit, 1) + "\",";
     json += "\"dac1C\":\"" + String(dac1Calib, 2) + "\",";
     json += "\"dac2C\":\"" + String(dac2Calib, 2) + "\",";
-    json += "\"minV\":\"" + String(minDacVolt, 2) + "\"";
+    json += "\"minV\":\"" + String(minDacVolt, 2) + "\",";
+    json += "\"maxV\":\"" + String(maxDacVolt, 2) + "\"";
     json += "}";
     server.send(200, "application/json", json);
 }
@@ -672,14 +677,21 @@ void handleSetCalib() {
     }
     server.send(200, "text/plain", "OK");
 }
-void handleSetMinVolt() {
-    if (server.hasArg("v")) {
-        minDacVolt = server.arg("v").toFloat();
+void handleSetVoltLimits() {
+    if (server.hasArg("min") && server.hasArg("max")) {
+        minDacVolt = server.arg("min").toFloat();
+        maxDacVolt = server.arg("max").toFloat();
+        
         if (minDacVolt < 0.0) minDacVolt = 0.0;
-        if (minDacVolt > 9.5) minDacVolt = 9.5;
+        if (minDacVolt > 10.0) minDacVolt = 10.0;
+        if (maxDacVolt < minDacVolt) maxDacVolt = minDacVolt;
+        if (maxDacVolt > 10.0) maxDacVolt = 10.0;
+
         memory.putFloat("minDacVolt", minDacVolt);
-        myPID.SetOutputLimits(minDacVolt, currentMaxDac);
-        Serial.printf("[SYS] Sztywna podloga napięcia ustawiona na: %.2fV\n", minDacVolt);
+        memory.putFloat("maxDacVolt", maxDacVolt);
+        myPID.SetOutputLimits(minDacVolt, maxDacVolt);
+        
+        Serial.printf("[SYS] Sztywne limity napiecia: MIN=%.2fV | MAX=%.2fV\n", minDacVolt, maxDacVolt);
         triggerBlink(1, 1000);
     }
     server.send(200, "text/plain", "OK");
@@ -728,7 +740,7 @@ void toggleWiFi() {
         server.on("/api/set_alarms", HTTP_POST, handleSetAlarms);
         server.on("/api/set_pid", HTTP_POST, handleSetPID);
         server.on("/api/set_calib", HTTP_POST, handleSetCalib);
-        server.on("/api/set_min_volt", HTTP_POST, handleSetMinVolt);
+        server.on("/api/set_volt_limits", HTTP_POST, handleSetVoltLimits);
         server.on("/api/sd_list", HTTP_GET, handleSDList);
         server.on("/sd_read", HTTP_GET, handleSDRead);
         
@@ -768,7 +780,7 @@ void startRegulator() {
     myPID.SetMode(MANUAL);          
     
     if (napiecieZadajnika < minDacVolt) Output = minDacVolt;
-    else if (napiecieZadajnika > currentMaxDac) Output = currentMaxDac;
+    else if (napiecieZadajnika > maxDacVolt) Output = maxDacVolt;
     else Output = napiecieZadajnika;
     
     currentDac1 = Output * (dac1Ratio / 100.0);
@@ -783,9 +795,9 @@ void startRegulator() {
     
     // Twardy programowy kaganiec inteligentny
     if (finalDac1 < 0.0) finalDac1 = 0.0;
-    if (finalDac1 > currentMaxDac) finalDac1 = currentMaxDac;
+    if (finalDac1 > maxDacVolt) finalDac1 = maxDacVolt;
     if (finalDac2 < 0.0) finalDac2 = 0.0;
-    if (finalDac2 > currentMaxDac) finalDac2 = currentMaxDac;
+    if (finalDac2 > maxDacVolt) finalDac2 = maxDacVolt;
 
     uint16_t mv_dac1 = (uint16_t)(finalDac1 * 1000.0);
     uint16_t mv_dac2 = (uint16_t)(finalDac2 * 1000.0);
@@ -888,7 +900,7 @@ void setup() {
 
     delay(2000); 
     Serial.begin(115200); 
-    Serial.println("\n\n--- SYSTEM V13.3 (Ultimate Floor Configuration) ---");
+    Serial.println("\n\n--- SYSTEM V13.4 (Full Clamp) ---");
 
     // 1. ZALADOWANIE PAMIECI
     memory.begin("regulator", false); 
@@ -901,10 +913,15 @@ void setup() {
     
     outMode = memory.getInt("outMode", 0);
     
-    // Wczytanie recznej podlogi (domyslnie 3.5V tak jak dawniej dzialalo to bezblednie)
+    // Wczytanie z EEPROM pelnych limitow
     minDacVolt = memory.getFloat("minDacVolt", 3.5);
     if(isnan(minDacVolt) || minDacVolt < 0.0) minDacVolt = 0.0;
-    if(minDacVolt > 9.5) minDacVolt = 9.5;
+    if(minDacVolt > 10.0) minDacVolt = 10.0;
+
+    maxDacVolt = memory.getFloat("maxDacVolt", 10.0);
+    if(isnan(maxDacVolt) || maxDacVolt < 0.0) maxDacVolt = 10.0;
+    if(maxDacVolt > 10.0) maxDacVolt = 10.0;
+    if(maxDacVolt < minDacVolt) maxDacVolt = minDacVolt;
 
     applyOutputMode(); 
 
@@ -1014,6 +1031,7 @@ void loop() {
         float diag_u = pzem.voltage();
         statusPZEM = !isnan(diag_u);
 
+        // Ping Asynchroniczny do Nextiona 
         NextionSerial.print("sendme");
         NextionSerial.write(0xFF);
         NextionSerial.write(0xFF);
@@ -1051,13 +1069,15 @@ void loop() {
             if (currentDac2 < minDacVolt) currentDac2 = minDacVolt;
         }
 
+        // APLIKACJA OFFSETU KALIBRACYJNEGO 
         float finalDac1 = currentDac1 + dac1Calib;
         float finalDac2 = currentDac2 + dac2Calib;
 
+        // INTELIGENTNY SUFIT ZABEZPIECZAJĄCY MODUŁ
         if (finalDac1 < 0.0) finalDac1 = 0.0;
-        if (finalDac1 > currentMaxDac) finalDac1 = currentMaxDac;
+        if (finalDac1 > maxDacVolt) finalDac1 = maxDacVolt;
         if (finalDac2 < 0.0) finalDac2 = 0.0;
-        if (finalDac2 > currentMaxDac) finalDac2 = currentMaxDac;
+        if (finalDac2 > maxDacVolt) finalDac2 = maxDacVolt;
 
         if(statusDAC) {
             uint16_t mv_dac1 = (uint16_t)(finalDac1 * 1000.0);
@@ -1097,12 +1117,7 @@ void loop() {
         }
 
         if (systemON) {
-            // ==============================================================
-            // TUTAJ BYŁ BŁĄD. WYRZUCAMY STREFĘ MARTWĄ!
-            // Maszyna ma ZAWSZE dążyć do maksymalnego zadanego limitu (maxLimit).
-            // Odjęcie 1.0A to margines bezpieczeństwa, żeby PID zaczął 
-            // łagodnie zwalniać na sekundę zanim dotknie twardego sufitu.
-            // ==============================================================
+            // ZELAZNA LOGIKA: Zawsze dazymy do maxa limitu
             Setpoint = maxLimit - 1.0; 
             
             Input = current_Amps;         
@@ -1146,6 +1161,7 @@ void loop() {
             myNex.writeStr("wilgotnosc.txt", String(dht_h, 0));
         }
 
+        // Na ekran wysyłamy wartości IDEALNE (bez ukrytego offsetu kalibracyjnego)
         char dacBuf[10];
         sprintf(dacBuf, "%.2f V", currentDac1); myNex.writeStr("pod1.txt", dacBuf); myNex.writeStr("dac1.txt", dacBuf);
         sprintf(dacBuf, "%.2f V", currentDac2); myNex.writeStr("pod2.txt", dacBuf); myNex.writeStr("dac2.txt", dacBuf);
