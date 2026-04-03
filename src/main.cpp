@@ -90,8 +90,13 @@ unsigned long lastUpdate = 0;
 unsigned long lastFastUpdate = 0;
 unsigned long lastPIDTime = 0;
 unsigned long lastDiagnosticTime = 0;
+
+// Zmienne do sekwencji RESET
 unsigned long resetPressTime = 0;
 bool isResetPressed = false;
+bool resetStage1 = false;
+bool resetStage2 = false;
+bool resetStage3 = false;
 
 const float WSPOLCZYNNIK_DZIELNIKA = 1.982;
 float filtr_waga = 0.15;
@@ -130,6 +135,7 @@ float dht_t = 0, dht_h = 0;
 void startRegulator();
 void stopRegulator();
 void updateSettingsScreen();
+bool isResetStage1Active(); // <--- NAPRAWA BŁĘDU KOMPILACJI
 
 // ================================================================
 // FUNKCJE POMOCNICZE
@@ -181,7 +187,7 @@ void initSD() {
         statusSD = true;
         File f = SD.open("/AI_LOG.txt", FILE_APPEND); 
         if(f) {
-            f.println("=== START SYSTEMU - V13.5_UI_&_DIAG ==="); 
+            f.println("=== START SYSTEMU - V13.7_COMPILE_FIX ==="); 
             f.close(); 
         }
         Serial.println("[SD] Karta aktywna.");
@@ -239,7 +245,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   </style>
 </head>
 <body>
-  <div class="header"><h1>⚙️ Granulator Pro V13.5</h1></div>
+  <div class="header"><h1>⚙️ Granulator Pro V13.7</h1></div>
   
   <div class="nav">
     <button class="tablinks active" onclick="openTab(event, 'Panel')">📊 Panel</button>
@@ -360,17 +366,26 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         <button type="submit" class="submit-btn" style="background:#00bcd4; color:#000;">ZAPISZ KALIBRACJĘ</button>
       </form>
     </div>
+
+    <div class="card" style="border: 2px solid var(--yellow);">
+      <h3 style="margin-top:0; color:var(--yellow);">8. Ustawienia Domyślne Systemu</h3>
+      <p style="font-size:13px; color:#aaa;">Zapisz obecną, idealną konfigurację jako wzorzec awaryjny.</p>
+      <button onclick="saveDefaults()" class="submit-btn" style="background:var(--yellow); color:#000;">ZAPISZ OBECNE JAKO DOMYŚLNE</button>
+      <button onclick="restoreDefaults()" class="submit-btn" style="background:var(--red); color:#fff; margin-top:10px;">PRZYWRÓĆ USTAWIENIA DOMYŚLNE</button>
+    </div>
   </div>
 
   <div id="SD" class="tab-content">
     <div class="card">
       <h3 style="margin-top:0; color:var(--yellow);">🧠 Parametry Systemu ESP32</h3>
       <div class="row"><span>Czas pracy (Uptime):</span> <span class="val" id="esp_up" style="color:var(--text);">-- min</span></div>
-      <div class="row"><span>Wolna Pamięć RAM:</span> <span class="val" id="esp_ram" style="color:var(--text);">-- KB</span></div>
+      <div class="row"><span>Wolna Pamięć RAM:</span> <span class="val" id="esp_ram" style="color:var(--text);">-- %</span></div>
+      <div class="row"><span>Procesor (CPU):</span> <span class="val" id="esp_cpu" style="color:var(--text);">--</span></div>
+      <div class="row"><span>Model Układu:</span> <span class="val" id="esp_chip" style="color:var(--text);">--</span></div>
       <div class="row"><span>Zajętość Pamięci (Flash):</span> <span class="val" id="esp_flash" style="color:var(--text);">-- KB</span></div>
       <div class="row"><span>Podłączone Telefony (WiFi):</span> <span class="val" id="esp_cli" style="color:var(--text);">--</span></div>
     </div>
-    
+
     <div class="card">
       <h3 style="margin-top:0; color:#00bcd4;">🩺 Status Sprzętu (Na Żywo)</h3>
       <div class="row"><span>Zasilanie (PZEM-004T):</span> <span id="st_pzem" class="badge-err">ŁADOWANIE</span></div>
@@ -405,6 +420,17 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   </div>
 
   <script>
+    let lastFocusTime = 0;
+
+    window.addEventListener('DOMContentLoaded', (event) => {
+        const inputs = document.querySelectorAll('input, select');
+        inputs.forEach(input => {
+            input.addEventListener('focus', () => { lastFocusTime = Date.now(); });
+            input.addEventListener('input', () => { lastFocusTime = Date.now(); });
+            input.addEventListener('blur', () => { lastFocusTime = Date.now(); });
+        });
+    });
+
     function openTab(evt, tabName) {
       var i, tabcontent, tablinks;
       tabcontent = document.getElementsByClassName("tab-content");
@@ -439,28 +465,23 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         document.getElementById('temp').innerText = data.temp + " °C";
         document.getElementById('hum').innerText = data.hum + " %";
 
-        // Inteligentna funkcja aktualizacji - pomija pole, jesli uzytkownik w nim wlasnie pisze
-        function updateIfInactive(id, value) {
-            let el = document.getElementById(id);
-            if (el && document.activeElement !== el) {
-                el.value = value;
-            }
+        // BLOKADA ODŚWIEŻANIA PÓL NA 10 SEKUND JEŚLI UŻYTKOWNIK PISZE
+        if (Date.now() - lastFocusTime > 10000) {
+            document.getElementById('outMode').value = data.outM;
+            document.getElementById('dac1r').value = data.dac1R;
+            document.getElementById('dac2r').value = data.dac2R;
+            document.getElementById('ovL').value = data.ovL;
+            document.getElementById('recL').value = data.recL;
+            document.getElementById('minL').value = data.minL;
+            document.getElementById('maxL').value = data.maxL;
+            document.getElementById('kp').value = data.kp;
+            document.getElementById('ki').value = data.ki;
+            document.getElementById('kd').value = data.kd;
+            document.getElementById('dac1c').value = data.dac1C;
+            document.getElementById('dac2c').value = data.dac2C;
+            document.getElementById('minV').value = data.minV;
+            document.getElementById('maxV').value = data.maxV;
         }
-
-        updateIfInactive('outMode', data.outM);
-        updateIfInactive('dac1r', data.dac1R);
-        updateIfInactive('dac2r', data.dac2R);
-        updateIfInactive('ovL', data.ovL);
-        updateIfInactive('recL', data.recL);
-        updateIfInactive('minL', data.minL);
-        updateIfInactive('maxL', data.maxL);
-        updateIfInactive('kp', data.kp);
-        updateIfInactive('ki', data.ki);
-        updateIfInactive('kd', data.kd);
-        updateIfInactive('dac1c', data.dac1C);
-        updateIfInactive('dac2c', data.dac2C);
-        updateIfInactive('minV', data.minV);
-        updateIfInactive('maxV', data.maxV);
       });
     }, 1000);
 
@@ -485,9 +506,10 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
             el_iso.innerText = "BŁĄD / BRAK I2C"; el_iso.className = "badge-err";
         }
 
-        // Aktualizacja Parametrow ESP32
         if(document.getElementById('esp_up')) document.getElementById('esp_up').innerText = data.up + " min";
-        if(document.getElementById('esp_ram')) document.getElementById('esp_ram').innerText = data.heap + " KB";
+        if(document.getElementById('esp_ram')) document.getElementById('esp_ram').innerText = data.heap_pct + " %";
+        if(document.getElementById('esp_cpu')) document.getElementById('esp_cpu').innerText = data.cpu;
+        if(document.getElementById('esp_chip')) document.getElementById('esp_chip').innerText = data.chip;
         if(document.getElementById('esp_flash')) document.getElementById('esp_flash').innerText = data.sketch;
         if(document.getElementById('esp_cli')) document.getElementById('esp_cli').innerText = data.clients;
 
@@ -496,35 +518,26 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
 
     function toggleSys() { fetch('/api/toggle_sys', {method: 'POST'}); }
     function toggleMode() { fetch('/api/toggle_mode', {method: 'POST'}); }
-    function saveOutMode(e) {
-      e.preventDefault();
-      fetch('/api/set_outmode?m='+document.getElementById('outMode').value, {method: 'POST'}).then(() => alert("Profil zapisany!"));
+    function saveOutMode(e) { e.preventDefault(); fetch('/api/set_outmode?m='+document.getElementById('outMode').value, {method: 'POST'}).then(() => alert("Profil zapisany!")); }
+    function saveRatios(e) { e.preventDefault(); fetch('/api/set_ratios?r1='+document.getElementById('dac1r').value+'&r2='+document.getElementById('dac2r').value, {method: 'POST'}).then(() => alert("Proporcje zaktualizowane!")); }
+    function saveAlarms(e) { e.preventDefault(); fetch('/api/set_alarms?ov='+document.getElementById('ovL').value+'&rec='+document.getElementById('recL').value, {method: 'POST'}).then(() => alert("Limity zapisane!")); }
+    function saveLimits(e) { e.preventDefault(); fetch('/api/set_limits?min='+document.getElementById('minL').value+'&max='+document.getElementById('maxL').value, {method: 'POST'}).then(() => alert("Widełki zapisane!")); }
+    function savePID(e) { e.preventDefault(); fetch('/api/set_pid?kp='+document.getElementById('kp').value+'&ki='+document.getElementById('ki').value+'&kd='+document.getElementById('kd').value, {method: 'POST'}).then(() => alert("PID zapisany!")); }
+    function saveCalib(e) { e.preventDefault(); fetch('/api/set_calib?c1='+document.getElementById('dac1c').value+'&c2='+document.getElementById('dac2c').value, {method: 'POST'}).then(() => alert("Kalibracja zapisana!")); }
+    function saveVoltLimits(e) { e.preventDefault(); fetch('/api/set_volt_limits?min='+document.getElementById('minV').value+'&max='+document.getElementById('maxV').value, {method: 'POST'}).then(() => alert("Limity napięcia zaktualizowane pomyślnie!")); }
+
+    function saveDefaults() {
+      if(confirm("Czy na pewno ZAPISAĆ obecne ustawienia jako DOMYŚLNE WZORCOWE?")) {
+        fetch('/api/save_defaults', {method: 'POST'}).then(() => alert("Ustawienia domyślne zostały zapisane na stałe w pamięci!"));
+      }
     }
-    function saveRatios(e) {
-      e.preventDefault();
-      fetch('/api/set_ratios?r1='+document.getElementById('dac1r').value+'&r2='+document.getElementById('dac2r').value, {method: 'POST'}).then(() => alert("Proporcje zaktualizowane!"));
-    }
-    function saveAlarms(e) {
-      e.preventDefault();
-      fetch('/api/set_alarms?ov='+document.getElementById('ovL').value+'&rec='+document.getElementById('recL').value, {method: 'POST'}).then(() => alert("Limity zapisane!"));
-    }
-    function saveLimits(e) {
-      e.preventDefault();
-      fetch('/api/set_limits?min='+document.getElementById('minL').value+'&max='+document.getElementById('maxL').value, {method: 'POST'}).then(() => alert("Widełki zapisane!"));
-    }
-    function savePID(e) {
-      e.preventDefault();
-      fetch('/api/set_pid?kp='+document.getElementById('kp').value+'&ki='+document.getElementById('ki').value+'&kd='+document.getElementById('kd').value, {method: 'POST'}).then(() => alert("PID zapisany!"));
-    }
-    function saveCalib(e) {
-      e.preventDefault();
-      fetch('/api/set_calib?c1='+document.getElementById('dac1c').value+'&c2='+document.getElementById('dac2c').value, {method: 'POST'}).then(() => alert("Kalibracja zapisana!"));
-    }
-    function saveVoltLimits(e) {
-      e.preventDefault();
-      let min = document.getElementById('minV').value;
-      let max = document.getElementById('maxV').value;
-      fetch('/api/set_volt_limits?min='+min+'&max='+max, {method: 'POST'}).then(() => alert("Limity napięcia zaktualizowane pomyślnie!"));
+    function restoreDefaults() {
+      if(confirm("UWAGA! Czy na pewno PRZYWRÓCIĆ maszynę do ustawień domyślnych? Obecne niezapisane zmiany zostaną utracone.")) {
+        fetch('/api/restore_defaults', {method: 'POST'}).then(() => {
+          alert("Przywrócono ustawienia domyślne! Odświeżam system...");
+          location.reload();
+        });
+      }
     }
 
     function loadSD() {
@@ -614,6 +627,8 @@ void handleApiData() {
 
 void handleApiHealth() {
     bool statusNex = (millis() - lastNextionResponseTime < 5000); 
+    float heapPct = ((float)ESP.getFreeHeap() / ESP.getHeapSize()) * 100.0;
+    
     String json = "{";
     json += "\"pzem\":\"" + String(statusPZEM ? 1 : 0) + "\",";
     json += "\"dac\":\"" + String(statusDAC ? 1 : 0) + "\",";
@@ -621,8 +636,11 @@ void handleApiHealth() {
     json += "\"dht\":\"" + String(!isnan(dht_t) ? 1 : 0) + "\",";
     json += "\"sd\":\"" + String(statusSD ? 1 : 0) + "\",";
     json += "\"nex\":\"" + String(statusNex ? 1 : 0) + "\",";
+    
     json += "\"up\":\"" + String(millis() / 60000) + "\",";
-    json += "\"heap\":\"" + String(ESP.getFreeHeap() / 1024) + "\",";
+    json += "\"heap_pct\":\"" + String(heapPct, 1) + "\",";
+    json += "\"cpu\":\"" + String(ESP.getCpuFreqMHz()) + " MHz\",";
+    json += "\"chip\":\"" + String(ESP.getChipModel()) + " (" + String(ESP.getChipCores()) + " Core)\",";
     json += "\"sketch\":\"" + String(ESP.getSketchSize() / 1024) + " KB / " + String((ESP.getSketchSize() + ESP.getFreeSketchSpace()) / 1024) + " KB\",";
     json += "\"clients\":\"" + String(WiFi.softAPgetStationNum()) + "\"";
     json += "}";
@@ -723,6 +741,57 @@ void handleSetVoltLimits() {
     server.send(200, "text/plain", "OK");
 }
 
+void handleSaveDefaults() {
+    memory.putFloat("d_minL", minLimit);
+    memory.putFloat("d_maxL", maxLimit);
+    memory.putFloat("d_kp", Kp);
+    memory.putFloat("d_ki", Ki);
+    memory.putFloat("d_kd", Kd);
+    memory.putFloat("d_ovL", overloadLimit);
+    memory.putFloat("d_recL", recoveryLimit);
+    memory.putFloat("d_d1R", dac1Ratio);
+    memory.putFloat("d_d2R", dac2Ratio);
+    memory.putFloat("d_minV", minDacVolt);
+    memory.putFloat("d_maxV", maxDacVolt);
+    memory.putInt("d_outM", outMode);
+    Serial.println("[SYS] Zapisano ustawienia domyslne do pamieci.");
+    server.send(200, "text/plain", "OK");
+}
+
+void handleRestoreDefaults() {
+    minLimit = memory.getFloat("d_minL", 10.0);
+    maxLimit = memory.getFloat("d_maxL", 40.0);
+    Kp = memory.getFloat("d_kp", 0.5);
+    Ki = memory.getFloat("d_ki", 0.1);
+    Kd = memory.getFloat("d_kd", 0.15);
+    overloadLimit = memory.getFloat("d_ovL", 7.0);
+    recoveryLimit = memory.getFloat("d_recL", 2.0);
+    dac1Ratio = memory.getFloat("d_d1R", 100.0);
+    dac2Ratio = memory.getFloat("d_d2R", 90.0);
+    minDacVolt = memory.getFloat("d_minV", 3.5);
+    maxDacVolt = memory.getFloat("d_maxV", 10.0);
+    outMode = memory.getInt("d_outM", 0);
+
+    memory.putFloat("minLim", minLimit);
+    memory.putFloat("maxLim", maxLimit);
+    memory.putFloat("kp", Kp);
+    memory.putFloat("ki", Ki);
+    memory.putFloat("kd", Kd);
+    memory.putFloat("ovrLimit", overloadLimit);
+    memory.putFloat("recLimit", recoveryLimit);
+    memory.putFloat("dac1Ratio", dac1Ratio);
+    memory.putFloat("dac2Ratio", dac2Ratio);
+    memory.putFloat("minDacVolt", minDacVolt);
+    memory.putFloat("maxDacVolt", maxDacVolt);
+    memory.putInt("outMode", outMode);
+
+    myPID.SetTunings(Kp, Ki, Kd);
+    applyOutputMode();
+    updateSettingsScreen();
+    Serial.println("[SYS] Przywrócono ustawienia domyslne.");
+    server.send(200, "text/plain", "OK");
+}
+
 void handleSDList() {
     if(SD.cardType() == CARD_NONE) { server.send(200, "application/json", "[]"); return; }
     File root = SD.open("/");
@@ -767,6 +836,8 @@ void toggleWiFi() {
         server.on("/api/set_pid", HTTP_POST, handleSetPID);
         server.on("/api/set_calib", HTTP_POST, handleSetCalib);
         server.on("/api/set_volt_limits", HTTP_POST, handleSetVoltLimits);
+        server.on("/api/save_defaults", HTTP_POST, handleSaveDefaults);
+        server.on("/api/restore_defaults", HTTP_POST, handleRestoreDefaults);
         server.on("/api/sd_list", HTTP_GET, handleSDList);
         server.on("/sd_read", HTTP_GET, handleSDRead);
         
@@ -858,7 +929,7 @@ void processButtonAction(int id) {
 }
 
 // ================================================================
-// PARSER DOTYKU EKRANU
+// PARSER DOTYKU EKRANU I MECHANIZM RESETU EKRANOWEGO
 // ================================================================
 int activeButtonID = 0;          
 unsigned long buttonHoldTimer = 0; 
@@ -886,8 +957,19 @@ void handleNextionInput() {
                         myNex.writeStr("pracaautoman.txt", modeAUTO ? "AUT" : "MAN"); 
                     }
                     if (cmpId == 8) { 
-                        if (event == 0x01) { isResetPressed = true; resetPressTime = millis(); myNex.writeStr("logi0.txt", "Trzymaj 5s..."); }
-                        else if (event == 0x00) { isResetPressed = false; myNex.writeStr("logi0.txt", "..."); }
+                        // OBSLUGA WZROKOWA RESETU
+                        if (event == 0x01) { 
+                            isResetPressed = true; 
+                            resetPressTime = millis(); 
+                            resetStage1 = false; resetStage2 = false; resetStage3 = false;
+                        }
+                        else if (event == 0x00) { 
+                            isResetPressed = false; 
+                            // Cofniecie na puszczenie guzika (bco 65535 to bialy)
+                            myNex.writeNum("pod2.bco", 65535);
+                            myNex.writeNum("pod1.bco", 65535);
+                            myNex.writeNum("granampery.bco", 65535);
+                        }
                     }
                 }
                 
@@ -904,9 +986,6 @@ void handleNextionInput() {
     }
     if (isButtonHeld && activeButtonID > 0 && millis() > buttonHoldTimer) {
         processButtonAction(activeButtonID); buttonHoldTimer = millis() + 100; 
-    }
-    if (isResetPressed && (millis() - resetPressTime > 5000)) {
-        myNex.writeStr("logi0.txt", "RESTART!"); delay(500); ESP.restart(); 
     }
 }
 
@@ -926,7 +1005,7 @@ void setup() {
 
     delay(2000); 
     Serial.begin(115200); 
-    Serial.println("\n\n--- SYSTEM V13.5 (UI & DIAG EDITION) ---");
+    Serial.println("\n\n--- SYSTEM V13.7 (COMPILE FIX EDITION) ---");
 
     // 1. ZALADOWANIE PAMIECI
     memory.begin("regulator", false); 
@@ -939,7 +1018,6 @@ void setup() {
     
     outMode = memory.getInt("outMode", 0);
     
-    // Wczytanie z EEPROM pelnych limitow
     minDacVolt = memory.getFloat("minDacVolt", 3.5);
     if(isnan(minDacVolt) || minDacVolt < 0.0) minDacVolt = 0.0;
     if(minDacVolt > 10.0) minDacVolt = 10.0;
@@ -1014,6 +1092,33 @@ void loop() {
     }
 
     handleNextionInput(); 
+
+    // --- ANIMACJA I OBSŁUGA TWARDEGO RESETU ---
+    if (isResetPressed) {
+        unsigned long holdTime = millis() - resetPressTime;
+        
+        if (holdTime > 1000 && !resetStage1) {
+            myNex.writeNum("pod2.bco", 0); 
+            myNex.writeStr("pod2.txt", "");
+            resetStage1 = true;
+        }
+        if (holdTime > 2000 && !resetStage2) {
+            myNex.writeNum("pod1.bco", 0); 
+            myNex.writeStr("pod1.txt", "");
+            resetStage2 = true;
+        }
+        if (holdTime > 3000 && !resetStage3) {
+            myNex.writeNum("granampery.bco", 0); 
+            myNex.writeStr("granampery.txt", "");
+            resetStage3 = true;
+        }
+        if (holdTime > 4000) {
+            // Sprzetowy reset ekranu Nextion (wszystko na czarno w ulamku sekundy)
+            myNex.writeStr("rest"); 
+            delay(500);
+            ESP.restart(); // Twardy restart procesora ESP32
+        }
+    }
 
     int buttonState = digitalRead(BUTTON_PIN);
     if (buttonState == LOW && !buttonWasPressed) {
@@ -1170,7 +1275,11 @@ void loop() {
             
             char buf[16]; 
             sprintf(buf, "%.3f A", current_Amps); 
-            myNex.writeStr("granampery.txt", buf); myNex.writeStr("natgr.txt", buf);
+            
+            if(!isResetStage1Active()) { // Blokujemy pisanie, jesli reset wyswietla na czarno
+                myNex.writeStr("granampery.txt", buf); 
+            }
+            myNex.writeStr("natgr.txt", buf);
             
             sprintf(buf, "%.1f V", pzem_u); myNex.writeStr("napgr.txt", buf);
             sprintf(buf, "%.0f W", pzem_p); myNex.writeStr("mocczy.txt", buf);
@@ -1187,10 +1296,11 @@ void loop() {
             myNex.writeStr("wilgotnosc.txt", String(dht_h, 0));
         }
 
-        // Na ekran wysyłamy wartości IDEALNE (bez ukrytego offsetu kalibracyjnego)
         char dacBuf[10];
-        sprintf(dacBuf, "%.2f V", currentDac1); myNex.writeStr("pod1.txt", dacBuf); myNex.writeStr("dac1.txt", dacBuf);
-        sprintf(dacBuf, "%.2f V", currentDac2); myNex.writeStr("pod2.txt", dacBuf); myNex.writeStr("dac2.txt", dacBuf);
+        if(!isResetPressed) { // Zeby wartosci z petli nagle nie przywrocily bialego tekstu podczas animacji kasowania
+            sprintf(dacBuf, "%.2f V", currentDac1); myNex.writeStr("pod1.txt", dacBuf); myNex.writeStr("dac1.txt", dacBuf);
+            sprintf(dacBuf, "%.2f V", currentDac2); myNex.writeStr("pod2.txt", dacBuf); myNex.writeStr("dac2.txt", dacBuf);
+        }
 
         if(SD.cardType() != CARD_NONE) { 
              float gb = SD.totalBytes() / (1024.0*1024.0*1024.0); 
@@ -1202,4 +1312,9 @@ void loop() {
         Serial.printf("%lu;%d;%d;%d;%.3f;%.1f;%.0f;%.2f;%.1f;%.1f;%.2f;%.2f;%.2f;%.2f\n", 
             millis(), systemON, modeAUTO, trippedByOverload, current_Amps, pzem_u, pzem_p, napiecieZadajnika, minLimit, maxLimit, Setpoint, Output, currentDac1, currentDac2);
     }
+}
+
+// Funkcja pomocnicza do wstrzymywania aktualizacji podczas kasowania
+bool isResetStage1Active() {
+    return resetStage3;
 }
