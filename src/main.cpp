@@ -60,7 +60,7 @@ PID myPID(&Input, &Output, &Setpoint, Kp, Ki, Kd, DIRECT);
 
 // --- ZMIENNE KONFIGURACJI SPRZĘTOWEJ ---
 int outMode = 0; 
-float currentMinDac = 0.0; 
+float currentMinDac = 3.5; 
 float currentMaxDac = 10.0; // INTELIGENTNY SUFIT
 
 // --- ZMIENNE KALIBRACYJNE (OFFSET) ---
@@ -181,7 +181,7 @@ void initSD() {
         statusSD = true;
         File f = SD.open("/AI_LOG.txt", FILE_APPEND); 
         if(f) {
-            f.println("=== START SYSTEMU - V13.0 ==="); 
+            f.println("=== START SYSTEMU - V13.2_GLK_MASTER ==="); 
             f.close(); 
         }
         Serial.println("[SD] Karta aktywna.");
@@ -195,15 +195,14 @@ void initSD() {
 void applyOutputMode() {
     if (outMode == 0) {
         // Bezpośrednio falownik 0-10V
-        currentMinDac = 0.0;
+        currentMinDac = 3.5;
         currentMaxDac = 10.0;
     } else if (outMode == 1) {
-        // Izolator Optyczny GLK (0-10V -> 0-20mA)
+        // Izolator Optyczny GLK (Pełne 0-20mA z podłogą od 0.0V)
         currentMinDac = 0.0;
         currentMaxDac = 10.0;
     } else if (outMode == 2) {
-        // Izolator Optyczny GLK (0-10V -> 4-20mA)
-        // Sprzetowo modul daje 0-20mA, wiec programowo ucinamy podloge na 2.0V (= 4mA)
+        // Izolator Optyczny GLK (Programowe docięcie 4-20mA) - 2V to 4mA
         currentMinDac = 2.0;
         currentMaxDac = 10.0;
     }
@@ -253,7 +252,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   </style>
 </head>
 <body>
-  <div class="header"><h1>⚙️ Granulator Pro V13.0</h1></div>
+  <div class="header"><h1>⚙️ Granulator Pro V13.2</h1></div>
   
   <div class="nav">
     <button class="tablinks active" onclick="openTab(event, 'Panel')">📊 Panel</button>
@@ -343,11 +342,11 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     <div class="card">
       <h3 style="margin-top:0; color:var(--purple);">5. Konfiguracja Sygnału (Hardware)</h3>
       <form onsubmit="saveOutMode(event)">
-        <label>Wybierz typ komunikacji na obiekcie:</label>
+        <label>Wybierz typ falowników na obiekcie:</label>
         <select id="outMode">
-          <option value="0">Standard Napięciowy (0 - 10V)</option>
-          <option value="1">Izolator Optyczny GLK (0 - 20mA)</option>
-          <option value="2">Izolator Optyczny GLK (4 - 20mA)</option>
+          <option value="0">Standard Napięciowy 0-10V (Odcina 3.5V)</option>
+          <option value="1">Izolator Optyczny GLK (Pełne 0 - 20mA)</option>
+          <option value="2">Izolator Optyczny GLK (Programowe 4 - 20mA)</option>
         </select>
         <button type="submit" class="submit-btn" style="background:var(--purple); color:#fff;">ZAPISZ PROFIL FALOWNIKA</button>
       </form>
@@ -871,7 +870,7 @@ void setup() {
 
     delay(2000); 
     Serial.begin(115200); 
-    Serial.println("\n\n--- SYSTEM V13.0 (Integracja Izolatora Optycznego GLK) ---");
+    Serial.println("\n\n--- SYSTEM V13.2 (Master GLK Edition) ---");
 
     // 1. ZALADOWANIE PAMIECI
     memory.begin("regulator", false); 
@@ -920,7 +919,7 @@ void setup() {
     statusDAC = (Wire.endTransmission() == 0);
     if(statusDAC) {
         dac.begin();
-        dac.setDACOutRange(dac.eOutputRange10V); // FIZYCZNIE ZAWSZE DAJE DO 10V
+        dac.setDACOutRange(dac.eOutputRange10V); 
         dac.setDACOutVoltage(0, 0);              
         dac.setDACOutVoltage(0, 1);              
     }
@@ -991,7 +990,6 @@ void loop() {
         float diag_u = pzem.voltage();
         statusPZEM = !isnan(diag_u);
 
-        // Ping Asynchroniczny do Nextiona 
         NextionSerial.print("sendme");
         NextionSerial.write(0xFF);
         NextionSerial.write(0xFF);
