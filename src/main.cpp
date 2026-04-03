@@ -60,8 +60,8 @@ PID myPID(&Input, &Output, &Setpoint, Kp, Ki, Kd, DIRECT);
 
 // --- ZMIENNE KONFIGURACJI SPRZĘTOWEJ ---
 int outMode = 0; 
-float minDacVolt = 3.5; // RĘCZNA PODŁOGA NAPIĘCIA DAC
-float maxDacVolt = 10.0; // RĘCZNY SUFIT NAPIĘCIA DAC
+float minDacVolt = 3.5; 
+float maxDacVolt = 10.0; 
 
 // --- ZMIENNE KALIBRACYJNE (OFFSET) ---
 float dac1Calib = 0.0;
@@ -181,7 +181,7 @@ void initSD() {
         statusSD = true;
         File f = SD.open("/AI_LOG.txt", FILE_APPEND); 
         if(f) {
-            f.println("=== START SYSTEMU - V13.4_FULL_CLAMP ==="); 
+            f.println("=== START SYSTEMU - V13.5_UI_&_DIAG ==="); 
             f.close(); 
         }
         Serial.println("[SD] Karta aktywna.");
@@ -193,8 +193,6 @@ void initSD() {
 }
 
 void applyOutputMode() {
-    // Profil tylko informacyjny do UI. 
-    // Limity steruje bezpośrednio użytkownik z poziomu WebUI!
     myPID.SetOutputLimits(minDacVolt, maxDacVolt);
     memory.putInt("outMode", outMode);
     Serial.printf("[SYS] Konfiguracja: Tryb %d | Podloga: %.2fV | Sufit: %.2fV\n", outMode, minDacVolt, maxDacVolt);
@@ -241,7 +239,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   </style>
 </head>
 <body>
-  <div class="header"><h1>⚙️ Granulator Pro V13.4</h1></div>
+  <div class="header"><h1>⚙️ Granulator Pro V13.5</h1></div>
   
   <div class="nav">
     <button class="tablinks active" onclick="openTab(event, 'Panel')">📊 Panel</button>
@@ -366,6 +364,14 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
 
   <div id="SD" class="tab-content">
     <div class="card">
+      <h3 style="margin-top:0; color:var(--yellow);">🧠 Parametry Systemu ESP32</h3>
+      <div class="row"><span>Czas pracy (Uptime):</span> <span class="val" id="esp_up" style="color:var(--text);">-- min</span></div>
+      <div class="row"><span>Wolna Pamięć RAM:</span> <span class="val" id="esp_ram" style="color:var(--text);">-- KB</span></div>
+      <div class="row"><span>Zajętość Pamięci (Flash):</span> <span class="val" id="esp_flash" style="color:var(--text);">-- KB</span></div>
+      <div class="row"><span>Podłączone Telefony (WiFi):</span> <span class="val" id="esp_cli" style="color:var(--text);">--</span></div>
+    </div>
+    
+    <div class="card">
       <h3 style="margin-top:0; color:#00bcd4;">🩺 Status Sprzętu (Na Żywo)</h3>
       <div class="row"><span>Zasilanie (PZEM-004T):</span> <span id="st_pzem" class="badge-err">ŁADOWANIE</span></div>
       <div class="row"><span>Ekran HMI (Nextion):</span> <span id="st_nex" class="badge-err">ŁADOWANIE</span></div>
@@ -375,6 +381,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       <div class="row"><span>Klimat (DHT11):</span> <span id="st_dht" class="badge-err">ŁADOWANIE</span></div>
       <div class="row"><span>Logi (Karta SD):</span> <span id="st_sd" class="badge-err">ŁADOWANIE</span></div>
     </div>
+    
     <div class="card">
       <h3 style="margin-top:0;">Pliki na karcie SD</h3>
       <button onclick="loadSD()" style="padding:10px; background:#444; color:#fff; border:none; border-radius:5px; margin-bottom:15px; width:100%;">🔄 Odśwież listę</button>
@@ -432,20 +439,28 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         document.getElementById('temp').innerText = data.temp + " °C";
         document.getElementById('hum').innerText = data.hum + " %";
 
-        if(document.getElementById('outMode').value == "") document.getElementById('outMode').value = data.outM;
-        if(!document.getElementById('dac1r').value) document.getElementById('dac1r').value = data.dac1R;
-        if(!document.getElementById('dac2r').value) document.getElementById('dac2r').value = data.dac2R;
-        if(!document.getElementById('ovL').value) document.getElementById('ovL').value = data.ovL;
-        if(!document.getElementById('recL').value) document.getElementById('recL').value = data.recL;
-        if(!document.getElementById('minL').value) document.getElementById('minL').value = data.minL;
-        if(!document.getElementById('maxL').value) document.getElementById('maxL').value = data.maxL;
-        if(!document.getElementById('kp').value) document.getElementById('kp').value = data.kp;
-        if(!document.getElementById('ki').value) document.getElementById('ki').value = data.ki;
-        if(!document.getElementById('kd').value) document.getElementById('kd').value = data.kd;
-        if(!document.getElementById('dac1c').value) document.getElementById('dac1c').value = data.dac1C;
-        if(!document.getElementById('dac2c').value) document.getElementById('dac2c').value = data.dac2C;
-        if(!document.getElementById('minV').value) document.getElementById('minV').value = data.minV;
-        if(!document.getElementById('maxV').value) document.getElementById('maxV').value = data.maxV;
+        // Inteligentna funkcja aktualizacji - pomija pole, jesli uzytkownik w nim wlasnie pisze
+        function updateIfInactive(id, value) {
+            let el = document.getElementById(id);
+            if (el && document.activeElement !== el) {
+                el.value = value;
+            }
+        }
+
+        updateIfInactive('outMode', data.outM);
+        updateIfInactive('dac1r', data.dac1R);
+        updateIfInactive('dac2r', data.dac2R);
+        updateIfInactive('ovL', data.ovL);
+        updateIfInactive('recL', data.recL);
+        updateIfInactive('minL', data.minL);
+        updateIfInactive('maxL', data.maxL);
+        updateIfInactive('kp', data.kp);
+        updateIfInactive('ki', data.ki);
+        updateIfInactive('kd', data.kd);
+        updateIfInactive('dac1c', data.dac1C);
+        updateIfInactive('dac2c', data.dac2C);
+        updateIfInactive('minV', data.minV);
+        updateIfInactive('maxV', data.maxV);
       });
     }, 1000);
 
@@ -469,6 +484,13 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         } else {
             el_iso.innerText = "BŁĄD / BRAK I2C"; el_iso.className = "badge-err";
         }
+
+        // Aktualizacja Parametrow ESP32
+        if(document.getElementById('esp_up')) document.getElementById('esp_up').innerText = data.up + " min";
+        if(document.getElementById('esp_ram')) document.getElementById('esp_ram').innerText = data.heap + " KB";
+        if(document.getElementById('esp_flash')) document.getElementById('esp_flash').innerText = data.sketch;
+        if(document.getElementById('esp_cli')) document.getElementById('esp_cli').innerText = data.clients;
+
       }).catch(err => console.log("Brak API Diagnostyki"));
     }, 2000);
 
@@ -598,7 +620,11 @@ void handleApiHealth() {
     json += "\"ads\":\"" + String(statusADS ? 1 : 0) + "\",";
     json += "\"dht\":\"" + String(!isnan(dht_t) ? 1 : 0) + "\",";
     json += "\"sd\":\"" + String(statusSD ? 1 : 0) + "\",";
-    json += "\"nex\":\"" + String(statusNex ? 1 : 0) + "\"";
+    json += "\"nex\":\"" + String(statusNex ? 1 : 0) + "\",";
+    json += "\"up\":\"" + String(millis() / 60000) + "\",";
+    json += "\"heap\":\"" + String(ESP.getFreeHeap() / 1024) + "\",";
+    json += "\"sketch\":\"" + String(ESP.getSketchSize() / 1024) + " KB / " + String((ESP.getSketchSize() + ESP.getFreeSketchSpace()) / 1024) + " KB\",";
+    json += "\"clients\":\"" + String(WiFi.softAPgetStationNum()) + "\"";
     json += "}";
     server.send(200, "application/json", json);
 }
@@ -900,7 +926,7 @@ void setup() {
 
     delay(2000); 
     Serial.begin(115200); 
-    Serial.println("\n\n--- SYSTEM V13.4 (Full Clamp) ---");
+    Serial.println("\n\n--- SYSTEM V13.5 (UI & DIAG EDITION) ---");
 
     // 1. ZALADOWANIE PAMIECI
     memory.begin("regulator", false); 
