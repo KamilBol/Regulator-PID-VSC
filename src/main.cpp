@@ -60,7 +60,7 @@ PID myPID(&Input, &Output, &Setpoint, Kp, Ki, Kd, DIRECT);
 
 // --- ZMIENNE KONFIGURACJI SPRZĘTOWEJ ---
 int outMode = 0; 
-float currentMinDac = 3.5; 
+float currentMinDac = 0.0; 
 float currentMaxDac = 10.0; // INTELIGENTNY SUFIT
 
 // --- ZMIENNE KALIBRACYJNE (OFFSET) ---
@@ -181,7 +181,7 @@ void initSD() {
         statusSD = true;
         File f = SD.open("/AI_LOG.txt", FILE_APPEND); 
         if(f) {
-            f.println("=== START SYSTEMU - V12.9 ==="); 
+            f.println("=== START SYSTEMU - V13.0 ==="); 
             f.close(); 
         }
         Serial.println("[SD] Karta aktywna.");
@@ -195,15 +195,16 @@ void initSD() {
 void applyOutputMode() {
     if (outMode == 0) {
         // Bezpośrednio falownik 0-10V
-        currentMinDac = 3.5;
+        currentMinDac = 0.0;
         currentMaxDac = 10.0;
     } else if (outMode == 1) {
-        // Modul Zewnetrzny 0-5V -> 4-20mA (17.5Hz to 35% z 5V = 1.75V)
-        currentMinDac = 1.75;
-        currentMaxDac = 5.0;
+        // Izolator Optyczny GLK (0-10V -> 0-20mA)
+        currentMinDac = 0.0;
+        currentMaxDac = 10.0;
     } else if (outMode == 2) {
-        // Modul Zewnetrzny 0-10V -> 4-20mA (17.5Hz to 35% z 10V = 3.5V)
-        currentMinDac = 3.5;
+        // Izolator Optyczny GLK (0-10V -> 4-20mA)
+        // Sprzetowo modul daje 0-20mA, wiec programowo ucinamy podloge na 2.0V (= 4mA)
+        currentMinDac = 2.0;
         currentMaxDac = 10.0;
     }
     myPID.SetOutputLimits(currentMinDac, currentMaxDac);
@@ -252,7 +253,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   </style>
 </head>
 <body>
-  <div class="header"><h1>⚙️ Granulator Pro V12.9</h1></div>
+  <div class="header"><h1>⚙️ Granulator Pro V13.0</h1></div>
   
   <div class="nav">
     <button class="tablinks active" onclick="openTab(event, 'Panel')">📊 Panel</button>
@@ -342,11 +343,11 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     <div class="card">
       <h3 style="margin-top:0; color:var(--purple);">5. Konfiguracja Sygnału (Hardware)</h3>
       <form onsubmit="saveOutMode(event)">
-        <label>Wybierz typ falowników na obiekcie:</label>
+        <label>Wybierz typ komunikacji na obiekcie:</label>
         <select id="outMode">
-          <option value="0">Napięciowy bezpośredni 0 - 10V</option>
-          <option value="1">Moduł Prądowy (Zakupiony 0-5V na 4-20mA)</option>
-          <option value="2">Moduł Prądowy (Standardowy 0-10V na 4-20mA)</option>
+          <option value="0">Standard Napięciowy (0 - 10V)</option>
+          <option value="1">Izolator Optyczny GLK (0 - 20mA)</option>
+          <option value="2">Izolator Optyczny GLK (4 - 20mA)</option>
         </select>
         <button type="submit" class="submit-btn" style="background:var(--purple); color:#fff;">ZAPISZ PROFIL FALOWNIKA</button>
       </form>
@@ -870,7 +871,7 @@ void setup() {
 
     delay(2000); 
     Serial.begin(115200); 
-    Serial.println("\n\n--- SYSTEM V12.9 (Uniwersalny Modul Hardware z Inteligentnym Sufitem) ---");
+    Serial.println("\n\n--- SYSTEM V13.0 (Integracja Izolatora Optycznego GLK) ---");
 
     // 1. ZALADOWANIE PAMIECI
     memory.begin("regulator", false); 
@@ -882,7 +883,7 @@ void setup() {
     myPID.SetTunings(Kp, Ki, Kd); 
     
     outMode = memory.getInt("outMode", 0);
-    applyOutputMode(); // Tutaj aplikowany jest od razu bezpieczny sufit (np. 5.0V)
+    applyOutputMode(); 
 
     dac1Ratio = memory.getFloat("dac1Ratio", 100.0);
     dac2Ratio = memory.getFloat("dac2Ratio", 90.0);
@@ -919,7 +920,7 @@ void setup() {
     statusDAC = (Wire.endTransmission() == 0);
     if(statusDAC) {
         dac.begin();
-        dac.setDACOutRange(dac.eOutputRange10V); // FIZYCZNIE 0-10V JEST ZAWSZE AKTYWNE
+        dac.setDACOutRange(dac.eOutputRange10V); // FIZYCZNIE ZAWSZE DAJE DO 10V
         dac.setDACOutVoltage(0, 0);              
         dac.setDACOutVoltage(0, 1);              
     }
