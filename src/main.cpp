@@ -60,7 +60,7 @@ PID myPID(&Input, &Output, &Setpoint, Kp, Ki, Kd, DIRECT);
 
 // --- ZMIENNE KONFIGURACJI SPRZĘTOWEJ ---
 int outMode = 0; 
-float currentMinDac = 3.5; 
+float minDacVolt = 3.5; // RĘCZNA PODŁOGA NAPIĘCIA DAC
 float currentMaxDac = 10.0; // INTELIGENTNY SUFIT
 
 // --- ZMIENNE KALIBRACYJNE (OFFSET) ---
@@ -181,7 +181,7 @@ void initSD() {
         statusSD = true;
         File f = SD.open("/AI_LOG.txt", FILE_APPEND); 
         if(f) {
-            f.println("=== START SYSTEMU - V13.2_GLK_MASTER ==="); 
+            f.println("=== START SYSTEMU - V13.3_ULTIMATE_FLOOR ==="); 
             f.close(); 
         }
         Serial.println("[SD] Karta aktywna.");
@@ -193,22 +193,12 @@ void initSD() {
 }
 
 void applyOutputMode() {
-    if (outMode == 0) {
-        // Bezpośrednio falownik 0-10V
-        currentMinDac = 3.5;
-        currentMaxDac = 10.0;
-    } else if (outMode == 1) {
-        // Izolator Optyczny GLK (Pełne 0-20mA z podłogą od 0.0V)
-        currentMinDac = 0.0;
-        currentMaxDac = 10.0;
-    } else if (outMode == 2) {
-        // Izolator Optyczny GLK (Programowe docięcie 4-20mA) - 2V to 4mA
-        currentMinDac = 2.0;
-        currentMaxDac = 10.0;
-    }
-    myPID.SetOutputLimits(currentMinDac, currentMaxDac);
+    // W tej wersji outMode nie nadpisuje juz twardo podlogi.
+    // Podloga jest wylacznie w rekach uzytkownika (zmienna minDacVolt).
+    currentMaxDac = 10.0;
+    myPID.SetOutputLimits(minDacVolt, currentMaxDac);
     memory.putInt("outMode", outMode);
-    Serial.printf("[SYS] Konfiguracja: Tryb %d | Podloga: %.2fV | Sufit: %.2fV\n", outMode, currentMinDac, currentMaxDac);
+    Serial.printf("[SYS] Konfiguracja: Tryb %d | Reczna Podloga: %.2fV | Sufit: %.2fV\n", outMode, minDacVolt, currentMaxDac);
 }
 
 // ================================================================
@@ -222,7 +212,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Regulator PID - Centrum Kontroli</title>
   <style>
-    :root { --bg: #121212; --card: #1e1e1e; --text: #fff; --accent: #00bcd4; --green: #4caf50; --red: #f44336; --orange: #ff9800; --purple: #9c27b0; --yellow: #ffeb3b; }
+    :root { --bg: #121212; --card: #1e1e1e; --text: #fff; --accent: #00bcd4; --green: #4caf50; --red: #f44336; --orange: #ff9800; --purple: #9c27b0; --yellow: #ffeb3b; --pink: #e91e63; }
     body { background-color: var(--bg); color: var(--text); font-family: 'Segoe UI', sans-serif; margin: 0; padding: 0; }
     .header { background: #000; padding: 15px; text-align: center; border-bottom: 2px solid var(--accent); }
     h1 { margin: 0; font-size: 22px; color: var(--accent); }
@@ -252,7 +242,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   </style>
 </head>
 <body>
-  <div class="header"><h1>⚙️ Granulator Pro V13.2</h1></div>
+  <div class="header"><h1>⚙️ Granulator Pro V13.3</h1></div>
   
   <div class="nav">
     <button class="tablinks active" onclick="openTab(event, 'Panel')">📊 Panel</button>
@@ -340,20 +330,29 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     </div>
 
     <div class="card">
-      <h3 style="margin-top:0; color:var(--purple);">5. Konfiguracja Sygnału (Hardware)</h3>
+      <h3 style="margin-top:0; color:var(--pink);">5. Ochrona Falownika (Podłoga Napięcia)</h3>
+      <form onsubmit="saveMinVolt(event)">
+        <label>Sztywny limit w Voltach, poniżej którego DAC nigdy nie zejdzie (np. wpisz 3.5 dla 17.5 Hz, lub 2.0 dla bazowych 4mA)</label>
+        <input type="number" step="0.01" id="minV" required>
+        <button type="submit" class="submit-btn" style="background:var(--pink); color:#fff;">ZAPISZ PODŁOGĘ NAPIĘCIA</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0; color:var(--purple);">6. Konfiguracja Sygnału (Informacyjna)</h3>
       <form onsubmit="saveOutMode(event)">
-        <label>Wybierz typ falowników na obiekcie:</label>
+        <label>Wybierz typ falowników na obiekcie (dla profili UI):</label>
         <select id="outMode">
-          <option value="0">Standard Napięciowy 0-10V (Odcina 3.5V)</option>
-          <option value="1">Izolator Optyczny GLK (Pełne 0 - 20mA)</option>
-          <option value="2">Izolator Optyczny GLK (Programowe 4 - 20mA)</option>
+          <option value="0">Standard Napięciowy 0-10V</option>
+          <option value="1">Izolator Optyczny GLK (0 - 20mA)</option>
+          <option value="2">Izolator Optyczny GLK (4 - 20mA)</option>
         </select>
         <button type="submit" class="submit-btn" style="background:var(--purple); color:#fff;">ZAPISZ PROFIL FALOWNIKA</button>
       </form>
     </div>
 
     <div class="card">
-      <h3 style="margin-top:0; color:#00bcd4;">6. Kalibracja Napięcia DAC (Offset)</h3>
+      <h3 style="margin-top:0; color:#00bcd4;">7. Kalibracja Napięcia DAC (Offset)</h3>
       <form onsubmit="saveCalib(event)">
         <label>Korekta DAC 1 [Volty] (np. -0.15 lub 0.20)</label>
         <input type="number" step="0.01" id="dac1c" required>
@@ -444,6 +443,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         if(!document.getElementById('kd').value) document.getElementById('kd').value = data.kd;
         if(!document.getElementById('dac1c').value) document.getElementById('dac1c').value = data.dac1C;
         if(!document.getElementById('dac2c').value) document.getElementById('dac2c').value = data.dac2C;
+        if(!document.getElementById('minV').value) document.getElementById('minV').value = data.minV;
       });
     }, 1000);
 
@@ -495,6 +495,10 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     function saveCalib(e) {
       e.preventDefault();
       fetch('/api/set_calib?c1='+document.getElementById('dac1c').value+'&c2='+document.getElementById('dac2c').value, {method: 'POST'}).then(() => alert("Kalibracja zapisana!"));
+    }
+    function saveMinVolt(e) {
+      e.preventDefault();
+      fetch('/api/set_min_volt?v='+document.getElementById('minV').value, {method: 'POST'}).then(() => alert("Sztywna podłoga napięcia zaktualizowana!"));
     }
 
     function loadSD() {
@@ -575,7 +579,8 @@ void handleApiData() {
     json += "\"ovL\":\"" + String(overloadLimit, 1) + "\",";
     json += "\"recL\":\"" + String(recoveryLimit, 1) + "\",";
     json += "\"dac1C\":\"" + String(dac1Calib, 2) + "\",";
-    json += "\"dac2C\":\"" + String(dac2Calib, 2) + "\"";
+    json += "\"dac2C\":\"" + String(dac2Calib, 2) + "\",";
+    json += "\"minV\":\"" + String(minDacVolt, 2) + "\"";
     json += "}";
     server.send(200, "application/json", json);
 }
@@ -667,6 +672,18 @@ void handleSetCalib() {
     }
     server.send(200, "text/plain", "OK");
 }
+void handleSetMinVolt() {
+    if (server.hasArg("v")) {
+        minDacVolt = server.arg("v").toFloat();
+        if (minDacVolt < 0.0) minDacVolt = 0.0;
+        if (minDacVolt > 9.5) minDacVolt = 9.5;
+        memory.putFloat("minDacVolt", minDacVolt);
+        myPID.SetOutputLimits(minDacVolt, currentMaxDac);
+        Serial.printf("[SYS] Sztywna podloga napięcia ustawiona na: %.2fV\n", minDacVolt);
+        triggerBlink(1, 1000);
+    }
+    server.send(200, "text/plain", "OK");
+}
 
 void handleSDList() {
     if(SD.cardType() == CARD_NONE) { server.send(200, "application/json", "[]"); return; }
@@ -711,6 +728,7 @@ void toggleWiFi() {
         server.on("/api/set_alarms", HTTP_POST, handleSetAlarms);
         server.on("/api/set_pid", HTTP_POST, handleSetPID);
         server.on("/api/set_calib", HTTP_POST, handleSetCalib);
+        server.on("/api/set_min_volt", HTTP_POST, handleSetMinVolt);
         server.on("/api/sd_list", HTTP_GET, handleSDList);
         server.on("/sd_read", HTTP_GET, handleSDRead);
         
@@ -749,15 +767,15 @@ void startRegulator() {
     myNex.writeStr("pidonoff.txt", "ON"); 
     myPID.SetMode(MANUAL);          
     
-    if (napiecieZadajnika < currentMinDac) Output = currentMinDac;
+    if (napiecieZadajnika < minDacVolt) Output = minDacVolt;
     else if (napiecieZadajnika > currentMaxDac) Output = currentMaxDac;
     else Output = napiecieZadajnika;
     
     currentDac1 = Output * (dac1Ratio / 100.0);
     currentDac2 = Output * (dac2Ratio / 100.0);
     
-    if (currentDac1 < currentMinDac) currentDac1 = currentMinDac;
-    if (currentDac2 < currentMinDac) currentDac2 = currentMinDac;
+    if (currentDac1 < minDacVolt) currentDac1 = minDacVolt;
+    if (currentDac2 < minDacVolt) currentDac2 = minDacVolt;
 
     // Aplikacja Offsetu Kalibracyjnego
     float finalDac1 = currentDac1 + dac1Calib;
@@ -870,7 +888,7 @@ void setup() {
 
     delay(2000); 
     Serial.begin(115200); 
-    Serial.println("\n\n--- SYSTEM V13.2 (Master GLK Edition) ---");
+    Serial.println("\n\n--- SYSTEM V13.3 (Ultimate Floor Configuration) ---");
 
     // 1. ZALADOWANIE PAMIECI
     memory.begin("regulator", false); 
@@ -882,6 +900,12 @@ void setup() {
     myPID.SetTunings(Kp, Ki, Kd); 
     
     outMode = memory.getInt("outMode", 0);
+    
+    // Wczytanie recznej podlogi (domyslnie 3.5V tak jak dawniej dzialalo to bezblednie)
+    minDacVolt = memory.getFloat("minDacVolt", 3.5);
+    if(isnan(minDacVolt) || minDacVolt < 0.0) minDacVolt = 0.0;
+    if(minDacVolt > 9.5) minDacVolt = 9.5;
+
     applyOutputMode(); 
 
     dac1Ratio = memory.getFloat("dac1Ratio", 100.0);
@@ -990,6 +1014,7 @@ void loop() {
         float diag_u = pzem.voltage();
         statusPZEM = !isnan(diag_u);
 
+        // Ping Asynchroniczny do Nextiona 
         NextionSerial.print("sendme");
         NextionSerial.write(0xFF);
         NextionSerial.write(0xFF);
@@ -1019,12 +1044,12 @@ void loop() {
             currentDac1 = napiecieZadajnika * (dac1Ratio / 100.0);
             currentDac2 = napiecieZadajnika * (dac2Ratio / 100.0); 
         } else {
-            if (isnan(Output)) Output = currentMinDac; 
+            if (isnan(Output)) Output = minDacVolt; 
             currentDac1 = Output * (dac1Ratio / 100.0);             
             currentDac2 = Output * (dac2Ratio / 100.0); 
             
-            if (currentDac1 < currentMinDac) currentDac1 = currentMinDac;
-            if (currentDac2 < currentMinDac) currentDac2 = currentMinDac;
+            if (currentDac1 < minDacVolt) currentDac1 = minDacVolt;
+            if (currentDac2 < minDacVolt) currentDac2 = minDacVolt;
         }
 
         // APLIKACJA OFFSETU KALIBRACYJNEGO 
