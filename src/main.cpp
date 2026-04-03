@@ -1014,7 +1014,6 @@ void loop() {
         float diag_u = pzem.voltage();
         statusPZEM = !isnan(diag_u);
 
-        // Ping Asynchroniczny do Nextiona 
         NextionSerial.print("sendme");
         NextionSerial.write(0xFF);
         NextionSerial.write(0xFF);
@@ -1052,11 +1051,9 @@ void loop() {
             if (currentDac2 < minDacVolt) currentDac2 = minDacVolt;
         }
 
-        // APLIKACJA OFFSETU KALIBRACYJNEGO 
         float finalDac1 = currentDac1 + dac1Calib;
         float finalDac2 = currentDac2 + dac2Calib;
 
-        // INTELIGENTNY SUFIT ZABEZPIECZAJĄCY MODUŁ
         if (finalDac1 < 0.0) finalDac1 = 0.0;
         if (finalDac1 > currentMaxDac) finalDac1 = currentMaxDac;
         if (finalDac2 < 0.0) finalDac2 = 0.0;
@@ -1100,14 +1097,14 @@ void loop() {
         }
 
         if (systemON) {
-            float margines = (maxLimit - minLimit) * 0.15; 
-            if (current_Amps > (maxLimit - margines)) {
-                Setpoint = maxLimit - margines;
-            } else if (current_Amps < (minLimit + margines)) {
-                Setpoint = minLimit + margines;
-            } else {
-                Setpoint = current_Amps; 
-            }
+            // ==============================================================
+            // TUTAJ BYŁ BŁĄD. WYRZUCAMY STREFĘ MARTWĄ!
+            // Maszyna ma ZAWSZE dążyć do maksymalnego zadanego limitu (maxLimit).
+            // Odjęcie 1.0A to margines bezpieczeństwa, żeby PID zaczął 
+            // łagodnie zwalniać na sekundę zanim dotknie twardego sufitu.
+            // ==============================================================
+            Setpoint = maxLimit - 1.0; 
+            
             Input = current_Amps;         
             myPID.Compute();   
         }
@@ -1149,12 +1146,11 @@ void loop() {
             myNex.writeStr("wilgotnosc.txt", String(dht_h, 0));
         }
 
-        // Na ekran wysyłamy wartości IDEALNE (bez ukrytego offsetu kalibracyjnego)
         char dacBuf[10];
         sprintf(dacBuf, "%.2f V", currentDac1); myNex.writeStr("pod1.txt", dacBuf); myNex.writeStr("dac1.txt", dacBuf);
         sprintf(dacBuf, "%.2f V", currentDac2); myNex.writeStr("pod2.txt", dacBuf); myNex.writeStr("dac2.txt", dacBuf);
 
-        if(statusSD) { 
+        if(SD.cardType() != CARD_NONE) { 
              float gb = SD.totalBytes() / (1024.0*1024.0*1024.0); 
              myNex.writeStr("sd.txt", String(gb, 1) + " GB"); 
         } else {
