@@ -96,12 +96,16 @@ unsigned long lastFastUpdate = 0;
 unsigned long lastPIDTime = 0;
 unsigned long lastDiagnosticTime = 0;
 
-// Zmienne do sekwencji RESET
+// Zmienne do sekwencji RESET (Page 0)
 unsigned long resetPressTime = 0;
 bool isResetPressed = false;
 bool resetStage1 = false;
 bool resetStage2 = false;
 bool resetStage3 = false;
+
+// Zmienne do sekwencji RESET FABRYCZNY (Page 4)
+unsigned long factoryResetPressTime = 0;
+bool isFactoryResetPressed = false;
 
 const float WSPOLCZYNNIK_DZIELNIKA = 1.982;
 float filtr_waga = 0.15;
@@ -141,6 +145,8 @@ void startRegulator();
 void stopRegulator();
 void updateSettingsScreen();
 bool isResetStage1Active(); 
+void handleRestoreDefaults(); 
+void toggleLocalWiFi(); 
 
 // ================================================================
 // FUNKCJE POMOCNICZE
@@ -192,7 +198,7 @@ void initSD() {
         statusSD = true;
         File f = SD.open("/AI_LOG.txt", FILE_APPEND); 
         if(f) {
-            f.println("=== START SYSTEMU - V14.0_WIFI_PRO ==="); 
+            f.println("=== START SYSTEMU - V14.2_PAGE4_IDS ==="); 
             f.close(); 
         }
         Serial.println("[SD] Karta aktywna.");
@@ -207,6 +213,32 @@ void applyOutputMode() {
     myPID.SetOutputLimits(minDacVolt, maxDacVolt);
     memory.putInt("outMode", outMode);
     Serial.printf("[SYS] Konfiguracja: Tryb %d | Podloga: %.2fV | Sufit: %.2fV\n", outMode, minDacVolt, maxDacVolt);
+}
+
+void toggleLocalWiFi() {
+    int apState = memory.getInt("apState", 1);
+    apState = (apState == 1) ? 0 : 1; 
+    
+    if (apState == 0 && routerSSID == "") {
+        Serial.println("[WIFI] ODRZUCONO! Nie mozna wylaczyc AP bez konfiguracji routera.");
+        apState = 1;
+    }
+    
+    memory.putInt("apState", apState);
+    
+    if (apState == 1) {
+        WiFi.mode(routerSSID != "" ? WIFI_AP_STA : WIFI_AP);
+        IPAddress local_ip(192, 168, 5, 1);
+        IPAddress gateway(192, 168, 5, 1);
+        IPAddress subnet(255, 255, 255, 0);
+        WiFi.softAPConfig(local_ip, gateway, subnet);
+        WiFi.softAP("RegulatorPID", "regpid12");
+        Serial.println("[WIFI] Siec Lokalna (AP) WLACZONA.");
+    } else {
+        WiFi.softAPdisconnect(true);
+        WiFi.mode(WIFI_STA);
+        Serial.println("[WIFI] Siec Lokalna (AP) WYLACZONA.");
+    }
 }
 
 // ================================================================
@@ -250,7 +282,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   </style>
 </head>
 <body>
-  <div class="header"><h1>⚙️ Granulator Pro V14.0</h1></div>
+  <div class="header"><h1>⚙️ Granulator Pro V14.2</h1></div>
   
   <div class="nav">
     <button class="tablinks active" onclick="openTab(event, 'Panel')">📊 Panel</button>
@@ -344,7 +376,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       <form onsubmit="saveVoltLimits(event)">
         <label>Dolna podłoga napięcia [V] (Poniżej której falownik nie zejdzie)</label>
         <input type="number" step="0.01" id="minV" required>
-        <label>Górny sufit napięcia [V] (Maksymalny gaz falownika)</label>
+        <label>Górny sufit napięcia [V] (Maksymalny gaz falownika. Domyślnie: 10.0V)</label>
         <input type="number" step="0.01" id="maxV" required>
         <button type="submit" class="submit-btn" style="background:var(--pink); color:#fff;">ZAPISZ LIMITY NAPIĘCIA</button>
       </form>
@@ -485,7 +517,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         document.getElementById('temp').innerText = data.temp + " °C";
         document.getElementById('hum').innerText = data.hum + " %";
 
-        // BLOKADA ODŚWIEŻANIA PÓL NA 10 SEKUND JEŚLI UŻYTKOWNIK PISZE
+        // BLOKADA ODŚWIEŻANIA PÓL NA 10 SEKUND
         if (Date.now() - lastFocusTime > 10000) {
             document.getElementById('outMode').value = data.outM;
             document.getElementById('dac1r').value = data.dac1R;
@@ -548,7 +580,6 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     function saveCalib(e) { e.preventDefault(); fetch('/api/set_calib?c1='+document.getElementById('dac1c').value+'&c2='+document.getElementById('dac2c').value, {method: 'POST'}).then(() => alert("Kalibracja zapisana!")); }
     function saveVoltLimits(e) { e.preventDefault(); fetch('/api/set_volt_limits?min='+document.getElementById('minV').value+'&max='+document.getElementById('maxV').value, {method: 'POST'}).then(() => alert("Limity napięcia zaktualizowane pomyślnie!")); }
 
-    // NOWE FUNKCJE
     function saveWiFi(e) {
       e.preventDefault();
       let s = document.getElementById('wifiSSID').value;
@@ -858,18 +889,17 @@ void handleRestoreDefaults() {
     memory.putFloat("maxDacVolt", maxDacVolt);
     memory.putInt("outMode", outMode);
     
-    // CZYSZCZENIE DANYCH ROUTERA PRZY RECOVERY
+    // CZYSZCZENIE DANYCH ROUTERA PRZY RECOVERY (POWRÓT DO TRYBU AP ONLY)
     memory.putString("ssid", "");
     memory.putString("pass", "");
-    routerSSID = "";
-    routerPASS = "";
+    memory.putInt("apState", 1); // Wymuszamy włączenie sieci maszynowej
 
     myPID.SetTunings(Kp, Ki, Kd);
     applyOutputMode();
     updateSettingsScreen();
     server.send(200, "text/plain", "OK");
     delay(500);
-    ESP.restart(); // Twardy restart by porzucil stare IP
+    ESP.restart(); 
 }
 
 void handleSDList() {
@@ -897,77 +927,77 @@ void handleSDRead() {
 }
 
 void setupWiFi() {
-    if (!isWifiAPActive) {
-        
-        // Tryb Dualny (AP + STA) jesli mamy dane routera
-        if (routerSSID != "") {
-            WiFi.mode(WIFI_AP_STA);
-            WiFi.begin(routerSSID.c_str(), routerPASS.c_str());
-            Serial.printf("[WIFI] Laczenie z routerem: %s\n", routerSSID.c_str());
-        } else {
-            WiFi.mode(WIFI_AP);
-        }
-        
-        // Bazowa siec serwisowa na sztywno
+    int apState = memory.getInt("apState", 1);
+    
+    // TWARDE CZYSZCZENIE CACHE'U PRZED NOWYM POŁĄCZENIEM
+    WiFi.disconnect(true);
+    WiFi.softAPdisconnect(true);
+    delay(100);
+
+    if (routerSSID != "") {
+        WiFi.mode(apState == 1 ? WIFI_AP_STA : WIFI_STA);
+        WiFi.begin(routerSSID.c_str(), routerPASS.c_str());
+        Serial.printf("[WIFI] Laczenie z routerem: %s\n", routerSSID.c_str());
+    } else {
+        WiFi.mode(WIFI_AP);
+        apState = 1; 
+        memory.putInt("apState", 1);
+    }
+    
+    if (apState == 1) {
         IPAddress local_ip(192, 168, 5, 1);
         IPAddress gateway(192, 168, 5, 1);
         IPAddress subnet(255, 255, 255, 0);
         WiFi.softAPConfig(local_ip, gateway, subnet);
         WiFi.softAP("RegulatorPID", "regpid12"); 
-        
-        if (MDNS.begin("granulator")) {
-            Serial.println("[mDNS] Adres maszyny to: http://granulator.local");
-        }
-        
-        server.on("/", HTTP_GET, handleRoot);
-        server.on("/api/data", HTTP_GET, handleApiData);
-        server.on("/api/health", HTTP_GET, handleApiHealth);
-        server.on("/api/toggle_sys", HTTP_POST, handleToggleSys);
-        server.on("/api/toggle_mode", HTTP_POST, handleToggleMode);
-        server.on("/api/set_limits", HTTP_POST, handleSetLimits);
-        server.on("/api/set_outmode", HTTP_POST, handleSetOutMode);
-        server.on("/api/set_ratios", HTTP_POST, handleSetRatios);
-        server.on("/api/set_alarms", HTTP_POST, handleSetAlarms);
-        server.on("/api/set_pid", HTTP_POST, handleSetPID);
-        server.on("/api/set_calib", HTTP_POST, handleSetCalib);
-        server.on("/api/set_volt_limits", HTTP_POST, handleSetVoltLimits);
-        server.on("/api/set_wifi", HTTP_POST, handleSetWiFi);
-        server.on("/api/restart", HTTP_POST, handleRestart);
-        server.on("/api/save_defaults", HTTP_POST, handleSaveDefaults);
-        server.on("/api/restore_defaults", HTTP_POST, handleRestoreDefaults);
-        server.on("/api/sd_list", HTTP_GET, handleSDList);
-        server.on("/sd_read", HTTP_GET, handleSDRead);
-        
-        server.on("/update", HTTP_POST, []() {
-            server.sendHeader("Connection", "close");
-            server.send(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
-            ESP.restart();
-        }, []() {
-            HTTPUpload& upload = server.upload();
-            if (upload.status == UPLOAD_FILE_START) {
-                if (!Update.begin(UPDATE_SIZE_UNKNOWN)) { Update.printError(Serial); }
-            } else if (upload.status == UPLOAD_FILE_WRITE) {
-                if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) { Update.printError(Serial); }
-            } else if (upload.status == UPLOAD_FILE_END) {
-                if (!Update.end(true)) { Update.printError(Serial); }
-            }
-        });
-
-        server.begin();
-        isWifiAPActive = true;
-        Serial.println("\n[WIFI] SIEC AP UTWORZONA! Adres: 192.168.5.1\n");
-        triggerBlink(3, 100); 
-    } else {
-        server.stop();
-        WiFi.softAPdisconnect(true);
-        if(routerSSID != "") WiFi.disconnect(true);
-        isWifiAPActive = false;
-        triggerBlink(1, 500); 
+        Serial.println("[WIFI] Otwarto wewnetrzna siec maszyny (AP).");
     }
+
+    if (MDNS.begin("granulator")) {
+        Serial.println("[mDNS] Adres maszyny to: http://granulator.local");
+    }
+    
+    server.on("/", HTTP_GET, handleRoot);
+    server.on("/api/data", HTTP_GET, handleApiData);
+    server.on("/api/health", HTTP_GET, handleApiHealth);
+    server.on("/api/toggle_sys", HTTP_POST, handleToggleSys);
+    server.on("/api/toggle_mode", HTTP_POST, handleToggleMode);
+    server.on("/api/set_limits", HTTP_POST, handleSetLimits);
+    server.on("/api/set_outmode", HTTP_POST, handleSetOutMode);
+    server.on("/api/set_ratios", HTTP_POST, handleSetRatios);
+    server.on("/api/set_alarms", HTTP_POST, handleSetAlarms);
+    server.on("/api/set_pid", HTTP_POST, handleSetPID);
+    server.on("/api/set_calib", HTTP_POST, handleSetCalib);
+    server.on("/api/set_volt_limits", HTTP_POST, handleSetVoltLimits);
+    server.on("/api/set_wifi", HTTP_POST, handleSetWiFi);
+    server.on("/api/restart", HTTP_POST, handleRestart);
+    server.on("/api/save_defaults", HTTP_POST, handleSaveDefaults);
+    server.on("/api/restore_defaults", HTTP_POST, handleRestoreDefaults);
+    server.on("/api/sd_list", HTTP_GET, handleSDList);
+    server.on("/sd_read", HTTP_GET, handleSDRead);
+    
+    server.on("/update", HTTP_POST, []() {
+        server.sendHeader("Connection", "close");
+        server.send(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
+        ESP.restart();
+    }, []() {
+        HTTPUpload& upload = server.upload();
+        if (upload.status == UPLOAD_FILE_START) {
+            if (!Update.begin(UPDATE_SIZE_UNKNOWN)) { Update.printError(Serial); }
+        } else if (upload.status == UPLOAD_FILE_WRITE) {
+            if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) { Update.printError(Serial); }
+        } else if (upload.status == UPLOAD_FILE_END) {
+            if (!Update.end(true)) { Update.printError(Serial); }
+        }
+    });
+
+    server.begin();
+    isWifiAPActive = true;
+    triggerBlink(3, 100); 
 }
 
 void onStationConnected(WiFiEvent_t event, WiFiEventInfo_t info) {
-    Serial.println("\n[WIFI] Telefon polaczyl sie z punktem dostepu maszyny!");
+    Serial.println("\n[WIFI] Telefon polaczyl sie z maszyna!");
     triggerBlink(2, 200); 
 }
 
@@ -1042,7 +1072,7 @@ bool isButtonHeld = false;
 void handleNextionInput() {
     while (NextionSerial.available()) { 
         byte b = NextionSerial.read();  
-        lastNextionResponseTime = millis(); // REJESTRACJA ZYCIA EKRANU 
+        lastNextionResponseTime = millis(); 
         
         if (b == 0x65) {                
             delay(15);                   
@@ -1063,7 +1093,7 @@ void handleNextionInput() {
                         myNex.writeStr("pracaautoman.txt", modeAUTO ? "AUT" : "MAN"); 
                     }
                     if (cmpId == 8) { 
-                        // OBSLUGA WZROKOWA RESETU
+                        // OBSLUGA WZROKOWA RESETU EKRANU GLOWNEGO
                         if (event == 0x01) { 
                             isResetPressed = true; 
                             resetPressTime = millis(); 
@@ -1071,8 +1101,7 @@ void handleNextionInput() {
                         }
                         else if (event == 0x00) { 
                             isResetPressed = false; 
-                            resetStage1 = false; resetStage2 = false; resetStage3 = false; // <-- TO ODBLOKOWUJE EKRAN!
-                            // Cofniecie na puszczenie guzika (bco 65535 to bialy)
+                            resetStage1 = false; resetStage2 = false; resetStage3 = false; 
                             myNex.writeNum("pod2.bco", 65535);
                             myNex.writeNum("pod1.bco", 65535);
                             myNex.writeNum("granampery.bco", 65535);
@@ -1086,6 +1115,24 @@ void handleNextionInput() {
                         processButtonAction(activeButtonID); buttonHoldTimer = millis() + 400; 
                     } else if (event == 0x00) { 
                         activeButtonID = 0; isButtonHeld = false; 
+                    }
+                }
+
+                if (pageId == 4) {
+                    // GUZIK DO WYLACZANIA / WLACZANIA LOKALNEGO WIFI (ZMIENIONE ID = 7)
+                    if (cmpId == 7 && event == 0x01) { 
+                        toggleLocalWiFi();
+                    }
+                    
+                    // GUZIK DO RESETU DO USTAWIEŃ FABRYCZNYCH I CZYSZCZENIA DANYCH ROUTERA (ZMIENIONE ID = 8)
+                    if (cmpId == 8) {
+                        if (event == 0x01) {
+                            isFactoryResetPressed = true;
+                            factoryResetPressTime = millis();
+                        } else if (event == 0x00) {
+                            isFactoryResetPressed = false;
+                            myNex.writeNum("page4.bco", 65535); // Cofniecie zmiany tla
+                        }
                     }
                 }
             }
@@ -1112,7 +1159,7 @@ void setup() {
 
     delay(2000); 
     Serial.begin(115200); 
-    Serial.println("\n\n--- SYSTEM V14.0 (WIFI PRO) ---");
+    Serial.println("\n\n--- SYSTEM V14.2 (PAGE4 IDS) ---");
 
     // 1. ZALADOWANIE PAMIECI I SIECI
     memory.begin("regulator", false); 
@@ -1154,7 +1201,7 @@ void setup() {
     if (isnan(dac1Calib)) dac1Calib = 0.0;
     if (isnan(dac2Calib)) dac2Calib = 0.0;
 
-    // 2. NATYCHMIASTOWY START WIFI 
+    // 2. NATYCHMIASTOWY START WIFI (DUAL MODE)
     WiFi.onEvent(onStationConnected, ARDUINO_EVENT_WIFI_AP_STACONNECTED);
     setupWiFi();
 
@@ -1203,7 +1250,7 @@ void loop() {
 
     handleNextionInput(); 
 
-    // --- ANIMACJA I OBSŁUGA TWARDEGO RESETU ---
+    // --- ANIMACJA I OBSŁUGA TWARDEGO RESETU (PAGE 0) ---
     if (isResetPressed) {
         unsigned long holdTime = millis() - resetPressTime;
         
@@ -1223,10 +1270,19 @@ void loop() {
             resetStage3 = true;
         }
         if (holdTime > 4000) {
-            // Sprzetowy reset ekranu Nextion (wszystko na czarno w ulamku sekundy)
             myNex.writeStr("rest"); 
             delay(500);
-            ESP.restart(); // Twardy restart procesora ESP32
+            ESP.restart(); 
+        }
+    }
+
+    // --- ANIMACJA I OBSLUGA RESETU FABRYCZNEGO (PAGE 4) ---
+    if (isFactoryResetPressed) {
+        unsigned long holdTime = millis() - factoryResetPressTime;
+        if (holdTime > 3000) {
+            myNex.writeNum("page4.bco", 0); // Ekran gasnie
+            delay(500);
+            handleRestoreDefaults(); // Ta funkcja kasuje router, wlacza AP i resetuje ESP
         }
     }
 
@@ -1272,7 +1328,6 @@ void loop() {
         float diag_u = pzem.voltage();
         statusPZEM = !isnan(diag_u);
 
-        // Ping Asynchroniczny do Nextiona 
         NextionSerial.print("sendme");
         NextionSerial.write(0xFF);
         NextionSerial.write(0xFF);
@@ -1310,11 +1365,9 @@ void loop() {
             if (currentDac2 < minDacVolt) currentDac2 = minDacVolt;
         }
 
-        // APLIKACJA OFFSETU KALIBRACYJNEGO 
         float finalDac1 = currentDac1 + dac1Calib;
         float finalDac2 = currentDac2 + dac2Calib;
 
-        // INTELIGENTNY SUFIT ZABEZPIECZAJĄCY MODUŁ
         if (finalDac1 < 0.0) finalDac1 = 0.0;
         if (finalDac1 > maxDacVolt) finalDac1 = maxDacVolt;
         if (finalDac2 < 0.0) finalDac2 = 0.0;
@@ -1358,9 +1411,7 @@ void loop() {
         }
 
         if (systemON) {
-            // ZELAZNA LOGIKA: Zawsze dazymy do maxa limitu
             Setpoint = maxLimit - 1.0; 
-            
             Input = current_Amps;         
             myPID.Compute();   
         }
@@ -1386,7 +1437,7 @@ void loop() {
             char buf[16]; 
             sprintf(buf, "%.3f A", current_Amps); 
             
-            if(!isResetStage1Active()) { // Blokujemy pisanie, jesli reset wyswietla na czarno
+            if(!isResetStage1Active()) {
                 myNex.writeStr("granampery.txt", buf); 
             }
             myNex.writeStr("natgr.txt", buf);
@@ -1407,7 +1458,7 @@ void loop() {
         }
 
         char dacBuf[10];
-        if(!isResetPressed) { // Zeby wartosci z petli nagle nie przywrocily bialego tekstu podczas animacji kasowania
+        if(!isResetPressed) {
             sprintf(dacBuf, "%.2f V", currentDac1); myNex.writeStr("pod1.txt", dacBuf); myNex.writeStr("dac1.txt", dacBuf);
             sprintf(dacBuf, "%.2f V", currentDac2); myNex.writeStr("pod2.txt", dacBuf); myNex.writeStr("dac2.txt", dacBuf);
         }
@@ -1419,12 +1470,15 @@ void loop() {
              myNex.writeStr("sd.txt", "NO SD"); 
         }
         
-        // PINGUJ ADRES IP DO EKRANU NA PAGE4 (jesli ruter polaczony)
+        // --- AKTUALIZACJA DANYCH NA PAGE4 (IP + STAN LOKALNEGO WIFI) ---
         if (WiFi.status() == WL_CONNECTED) {
             myNex.writeStr("page4.ip.txt", WiFi.localIP().toString());
         } else {
             myNex.writeStr("page4.ip.txt", "192.168.5.1");
         }
+        
+        int apState = memory.getInt("apState", 1);
+        myNex.writeStr("page4.wifilokalonoff.txt", apState == 1 ? "ON" : "OFF");
 
         Serial.printf("%lu;%d;%d;%d;%.3f;%.1f;%.0f;%.2f;%.1f;%.1f;%.2f;%.2f;%.2f;%.2f\n", 
             millis(), systemON, modeAUTO, trippedByOverload, current_Amps, pzem_u, pzem_p, napiecieZadajnika, minLimit, maxLimit, Setpoint, Output, currentDac1, currentDac2);
