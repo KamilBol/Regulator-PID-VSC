@@ -135,7 +135,7 @@ float dht_t = 0, dht_h = 0;
 void startRegulator();
 void stopRegulator();
 void updateSettingsScreen();
-bool isResetStage1Active(); // <--- NAPRAWA BŁĘDU KOMPILACJI
+bool isResetStage1Active(); 
 
 // ================================================================
 // FUNKCJE POMOCNICZE
@@ -187,7 +187,7 @@ void initSD() {
         statusSD = true;
         File f = SD.open("/AI_LOG.txt", FILE_APPEND); 
         if(f) {
-            f.println("=== START SYSTEMU - V13.7_COMPILE_FIX ==="); 
+            f.println("=== START SYSTEMU - V13.8_ULTIMATE ==="); 
             f.close(); 
         }
         Serial.println("[SD] Karta aktywna.");
@@ -245,7 +245,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   </style>
 </head>
 <body>
-  <div class="header"><h1>⚙️ Granulator Pro V13.7</h1></div>
+  <div class="header"><h1>⚙️ Granulator Pro V13.8</h1></div>
   
   <div class="nav">
     <button class="tablinks active" onclick="openTab(event, 'Panel')">📊 Panel</button>
@@ -378,7 +378,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   <div id="SD" class="tab-content">
     <div class="card">
       <h3 style="margin-top:0; color:var(--yellow);">🧠 Parametry Systemu ESP32</h3>
-      <div class="row"><span>Czas pracy (Uptime):</span> <span class="val" id="esp_up" style="color:var(--text);">-- min</span></div>
+      <div class="row"><span>Czas pracy (Uptime):</span> <span class="val" id="esp_up" style="color:var(--text);">--</span></div>
       <div class="row"><span>Wolna Pamięć RAM:</span> <span class="val" id="esp_ram" style="color:var(--text);">-- %</span></div>
       <div class="row"><span>Procesor (CPU):</span> <span class="val" id="esp_cpu" style="color:var(--text);">--</span></div>
       <div class="row"><span>Model Układu:</span> <span class="val" id="esp_chip" style="color:var(--text);">--</span></div>
@@ -506,7 +506,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
             el_iso.innerText = "BŁĄD / BRAK I2C"; el_iso.className = "badge-err";
         }
 
-        if(document.getElementById('esp_up')) document.getElementById('esp_up').innerText = data.up + " min";
+        if(document.getElementById('esp_up')) document.getElementById('esp_up').innerText = data.up;
         if(document.getElementById('esp_ram')) document.getElementById('esp_ram').innerText = data.heap_pct + " %";
         if(document.getElementById('esp_cpu')) document.getElementById('esp_cpu').innerText = data.cpu;
         if(document.getElementById('esp_chip')) document.getElementById('esp_chip').innerText = data.chip;
@@ -637,7 +637,14 @@ void handleApiHealth() {
     json += "\"sd\":\"" + String(statusSD ? 1 : 0) + "\",";
     json += "\"nex\":\"" + String(statusNex ? 1 : 0) + "\",";
     
-    json += "\"up\":\"" + String(millis() / 60000) + "\",";
+    unsigned long sec = millis() / 1000;
+    String upStr = "";
+    if(sec < 60) upStr = String(sec) + " s";
+    else if(sec < 3600) upStr = String(sec/60) + " min";
+    else if(sec < 86400) upStr = String(sec/3600) + "h " + String((sec%3600)/60) + "m";
+    else upStr = String(sec/86400) + "d " + String((sec%86400)/3600) + "h";
+    
+    json += "\"up\":\"" + upStr + "\",";
     json += "\"heap_pct\":\"" + String(heapPct, 1) + "\",";
     json += "\"cpu\":\"" + String(ESP.getCpuFreqMHz()) + " MHz\",";
     json += "\"chip\":\"" + String(ESP.getChipModel()) + " (" + String(ESP.getChipCores()) + " Core)\",";
@@ -965,6 +972,7 @@ void handleNextionInput() {
                         }
                         else if (event == 0x00) { 
                             isResetPressed = false; 
+                            resetStage1 = false; resetStage2 = false; resetStage3 = false; // <-- TO ODBLOKOWUJE EKRAN!
                             // Cofniecie na puszczenie guzika (bco 65535 to bialy)
                             myNex.writeNum("pod2.bco", 65535);
                             myNex.writeNum("pod1.bco", 65535);
@@ -1005,7 +1013,7 @@ void setup() {
 
     delay(2000); 
     Serial.begin(115200); 
-    Serial.println("\n\n--- SYSTEM V13.7 (COMPILE FIX EDITION) ---");
+    Serial.println("\n\n--- SYSTEM V13.8 (ULTIMATE EDITION) ---");
 
     // 1. ZALADOWANIE PAMIECI
     memory.begin("regulator", false); 
