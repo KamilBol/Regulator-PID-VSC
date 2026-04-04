@@ -13,6 +13,7 @@
 #include <DHT.h>
 #include <Preferences.h>
 #include <WiFi.h>              
+#include <ESPmDNS.h>           
 #include <WebServer.h>         
 #include <Update.h>            
 
@@ -66,6 +67,10 @@ float maxDacVolt = 10.0;
 // --- ZMIENNE KALIBRACYJNE (OFFSET) ---
 float dac1Calib = 0.0;
 float dac2Calib = 0.0;
+
+// --- ZMIENNE SIECIOWE ---
+String routerSSID = "";
+String routerPASS = "";
 
 // ================================================================
 // ZMIENNE GLOBALNE
@@ -187,7 +192,7 @@ void initSD() {
         statusSD = true;
         File f = SD.open("/AI_LOG.txt", FILE_APPEND); 
         if(f) {
-            f.println("=== START SYSTEMU - V13.9_PERFECT_DIAG ==="); 
+            f.println("=== START SYSTEMU - V14.0_WIFI_PRO ==="); 
             f.close(); 
         }
         Serial.println("[SD] Karta aktywna.");
@@ -245,7 +250,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   </style>
 </head>
 <body>
-  <div class="header"><h1>⚙️ Granulator Pro V13.9</h1></div>
+  <div class="header"><h1>⚙️ Granulator Pro V14.0</h1></div>
   
   <div class="nav">
     <button class="tablinks active" onclick="openTab(event, 'Panel')">📊 Panel</button>
@@ -267,6 +272,8 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       <div class="row"><span>Wyjście na Falownik 1:</span> <span class="val" id="dac" style="color:var(--orange);">-- V</span></div>
       <div class="row"><span>Wyjście na Falownik 2:</span> <span class="val" id="dac2v" style="color:var(--purple);">-- V</span></div>
     </div>
+    
+    <button class="submit-btn" style="background:var(--red); color:#fff; margin-top:20px; font-size:16px;" onclick="restartESP()">🔄 RESTART MASZYNY (ESP32)</button>
   </div>
 
   <div id="Sensory" class="tab-content">
@@ -337,7 +344,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       <form onsubmit="saveVoltLimits(event)">
         <label>Dolna podłoga napięcia [V] (Poniżej której falownik nie zejdzie)</label>
         <input type="number" step="0.01" id="minV" required>
-        <label>Górny sufit napięcia [V] (Maksymalny gaz falownika. Domyślnie: 10.0V)</label>
+        <label>Górny sufit napięcia [V] (Maksymalny gaz falownika)</label>
         <input type="number" step="0.01" id="maxV" required>
         <button type="submit" class="submit-btn" style="background:var(--pink); color:#fff;">ZAPISZ LIMITY NAPIĘCIA</button>
       </form>
@@ -367,8 +374,20 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       </form>
     </div>
 
+    <div class="card">
+      <h3 style="margin-top:0; color:#4caf50;">8. Sieć WiFi (Połączenie z Routerem)</h3>
+      <p style="font-size:12px; color:#aaa;">Prywatna sieć AP "RegulatorPID" (hasło: regpid12) jest aktywna zawsze jako awaryjna.</p>
+      <form onsubmit="saveWiFi(event)">
+        <label>Nazwa sieci WiFi (SSID)</label>
+        <input type="text" id="wifiSSID">
+        <label>Hasło do WiFi</label>
+        <input type="password" id="wifiPASS">
+        <button type="submit" class="submit-btn" style="background:#4caf50; color:#fff;">ZAPISZ I POŁĄCZ (Restart)</button>
+      </form>
+    </div>
+
     <div class="card" style="border: 2px solid var(--yellow);">
-      <h3 style="margin-top:0; color:var(--yellow);">8. Ustawienia Domyślne Systemu</h3>
+      <h3 style="margin-top:0; color:var(--yellow);">9. Ustawienia Domyślne Systemu</h3>
       <p style="font-size:13px; color:#aaa;">Zapisz obecną, idealną konfigurację jako wzorzec awaryjny.</p>
       <button onclick="saveDefaults()" class="submit-btn" style="background:var(--yellow); color:#000;">ZAPISZ OBECNE JAKO DOMYŚLNE</button>
       <button onclick="restoreDefaults()" class="submit-btn" style="background:var(--red); color:#fff; margin-top:10px;">PRZYWRÓĆ USTAWIENIA DOMYŚLNE</button>
@@ -383,6 +402,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       <div class="row"><span>Procesor (CPU):</span> <span class="val" id="esp_cpu" style="color:var(--text);">--</span></div>
       <div class="row"><span>Model Układu:</span> <span class="val" id="esp_chip" style="color:var(--text);">--</span></div>
       <div class="row"><span>Zajętość Pamięci (Flash):</span> <span class="val" id="esp_flash" style="color:var(--text);">-- KB</span></div>
+      <div class="row"><span>Adres IP (LAN / Router):</span> <span class="val" id="esp_rip" style="color:var(--text);">--</span></div>
       <div class="row"><span>Podłączone Telefony (WiFi):</span> <span class="val" id="esp_cli" style="color:var(--text);">--</span></div>
     </div>
 
@@ -481,6 +501,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
             document.getElementById('dac2c').value = data.dac2C;
             document.getElementById('minV').value = data.minV;
             document.getElementById('maxV').value = data.maxV;
+            document.getElementById('wifiSSID').value = data.wifi_s;
         }
       });
     }, 1000);
@@ -512,6 +533,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         if(document.getElementById('esp_chip')) document.getElementById('esp_chip').innerText = data.chip;
         if(document.getElementById('esp_flash')) document.getElementById('esp_flash').innerText = data.sketch;
         if(document.getElementById('esp_cli')) document.getElementById('esp_cli').innerText = data.clients;
+        if(document.getElementById('esp_rip')) document.getElementById('esp_rip').innerText = data.router_ip;
 
       }).catch(err => console.log("Brak API Diagnostyki"));
     }, 2000);
@@ -526,16 +548,36 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     function saveCalib(e) { e.preventDefault(); fetch('/api/set_calib?c1='+document.getElementById('dac1c').value+'&c2='+document.getElementById('dac2c').value, {method: 'POST'}).then(() => alert("Kalibracja zapisana!")); }
     function saveVoltLimits(e) { e.preventDefault(); fetch('/api/set_volt_limits?min='+document.getElementById('minV').value+'&max='+document.getElementById('maxV').value, {method: 'POST'}).then(() => alert("Limity napięcia zaktualizowane pomyślnie!")); }
 
+    // NOWE FUNKCJE
+    function saveWiFi(e) {
+      e.preventDefault();
+      let s = document.getElementById('wifiSSID').value;
+      let p = document.getElementById('wifiPASS').value;
+      fetch('/api/set_wifi?s='+encodeURIComponent(s)+'&p='+encodeURIComponent(p), {method: 'POST'}).then(() => {
+          alert("Dane sieci zapisane! Maszyna zrestartuje się, aby połączyć z routerem.");
+          setTimeout(() => location.reload(), 8000);
+      });
+    }
+
+    function restartESP() {
+        if(confirm("UWAGA! Czy na pewno chcesz zrestartować procesor maszyny? Maszyna natychmiast zatrzyma pracę!")) {
+            fetch('/api/restart', {method: 'POST'}).then(() => {
+                alert("Procesor uruchamia się ponownie. Odczekaj 10 sekund...");
+                setTimeout(() => location.reload(), 10000);
+            });
+        }
+    }
+
     function saveDefaults() {
       if(confirm("Czy na pewno ZAPISAĆ obecne ustawienia jako DOMYŚLNE WZORCOWE?")) {
         fetch('/api/save_defaults', {method: 'POST'}).then(() => alert("Ustawienia domyślne zostały zapisane na stałe w pamięci!"));
       }
     }
     function restoreDefaults() {
-      if(confirm("UWAGA! Czy na pewno PRZYWRÓCIĆ maszynę do ustawień domyślnych? Obecne niezapisane zmiany zostaną utracone.")) {
+      if(confirm("UWAGA! Czy na pewno PRZYWRÓCIĆ maszynę do ustawień domyślnych? Wyczyszczone zostaną również ustawienia domowego WiFi.")) {
         fetch('/api/restore_defaults', {method: 'POST'}).then(() => {
-          alert("Przywrócono ustawienia domyślne! Odświeżam system...");
-          location.reload();
+          alert("Przywrócono ustawienia domyślne! Restartuję maszynę...");
+          setTimeout(() => location.reload(), 8000);
         });
       }
     }
@@ -620,7 +662,8 @@ void handleApiData() {
     json += "\"dac1C\":\"" + String(dac1Calib, 2) + "\",";
     json += "\"dac2C\":\"" + String(dac2Calib, 2) + "\",";
     json += "\"minV\":\"" + String(minDacVolt, 2) + "\",";
-    json += "\"maxV\":\"" + String(maxDacVolt, 2) + "\"";
+    json += "\"maxV\":\"" + String(maxDacVolt, 2) + "\",";
+    json += "\"wifi_s\":\"" + routerSSID + "\"";
     json += "}";
     server.send(200, "application/json", json);
 }
@@ -653,7 +696,10 @@ void handleApiHealth() {
     json += "\"cpu\":\"" + String(ESP.getCpuFreqMHz()) + " MHz\",";
     json += "\"chip\":\"" + String(ESP.getChipModel()) + " (" + String(ESP.getChipCores()) + " Core)\",";
     json += "\"sketch\":\"" + String(ESP.getSketchSize() / 1024) + " KB / " + String((ESP.getSketchSize() + ESP.getFreeSketchSpace()) / 1024) + " KB\",";
-    json += "\"clients\":\"" + String(WiFi.softAPgetStationNum()) + "\"";
+    json += "\"clients\":\"" + String(WiFi.softAPgetStationNum()) + "\",";
+    
+    String routerIP = (WiFi.status() == WL_CONNECTED) ? WiFi.localIP().toString() : "Brak (Tylko AP)";
+    json += "\"router_ip\":\"" + routerIP + "\"";
     json += "}";
     server.send(200, "application/json", json);
 }
@@ -745,11 +791,27 @@ void handleSetVoltLimits() {
         memory.putFloat("minDacVolt", minDacVolt);
         memory.putFloat("maxDacVolt", maxDacVolt);
         myPID.SetOutputLimits(minDacVolt, maxDacVolt);
-        
-        Serial.printf("[SYS] Sztywne limity napiecia: MIN=%.2fV | MAX=%.2fV\n", minDacVolt, maxDacVolt);
         triggerBlink(1, 1000);
     }
     server.send(200, "text/plain", "OK");
+}
+
+void handleSetWiFi() {
+    if (server.hasArg("s") && server.hasArg("p")) {
+        routerSSID = server.arg("s");
+        routerPASS = server.arg("p");
+        memory.putString("ssid", routerSSID);
+        memory.putString("pass", routerPASS);
+        server.send(200, "text/plain", "OK");
+        delay(500);
+        ESP.restart();
+    }
+}
+
+void handleRestart() {
+    server.send(200, "text/plain", "OK");
+    delay(500);
+    ESP.restart();
 }
 
 void handleSaveDefaults() {
@@ -795,12 +857,19 @@ void handleRestoreDefaults() {
     memory.putFloat("minDacVolt", minDacVolt);
     memory.putFloat("maxDacVolt", maxDacVolt);
     memory.putInt("outMode", outMode);
+    
+    // CZYSZCZENIE DANYCH ROUTERA PRZY RECOVERY
+    memory.putString("ssid", "");
+    memory.putString("pass", "");
+    routerSSID = "";
+    routerPASS = "";
 
     myPID.SetTunings(Kp, Ki, Kd);
     applyOutputMode();
     updateSettingsScreen();
-    Serial.println("[SYS] Przywrócono ustawienia domyslne.");
     server.send(200, "text/plain", "OK");
+    delay(500);
+    ESP.restart(); // Twardy restart by porzucil stare IP
 }
 
 void handleSDList() {
@@ -827,13 +896,28 @@ void handleSDRead() {
     file.close();
 }
 
-void toggleWiFi() {
+void setupWiFi() {
     if (!isWifiAPActive) {
+        
+        // Tryb Dualny (AP + STA) jesli mamy dane routera
+        if (routerSSID != "") {
+            WiFi.mode(WIFI_AP_STA);
+            WiFi.begin(routerSSID.c_str(), routerPASS.c_str());
+            Serial.printf("[WIFI] Laczenie z routerem: %s\n", routerSSID.c_str());
+        } else {
+            WiFi.mode(WIFI_AP);
+        }
+        
+        // Bazowa siec serwisowa na sztywno
         IPAddress local_ip(192, 168, 5, 1);
         IPAddress gateway(192, 168, 5, 1);
         IPAddress subnet(255, 255, 255, 0);
         WiFi.softAPConfig(local_ip, gateway, subnet);
         WiFi.softAP("RegulatorPID", "regpid12"); 
+        
+        if (MDNS.begin("granulator")) {
+            Serial.println("[mDNS] Adres maszyny to: http://granulator.local");
+        }
         
         server.on("/", HTTP_GET, handleRoot);
         server.on("/api/data", HTTP_GET, handleApiData);
@@ -847,6 +931,8 @@ void toggleWiFi() {
         server.on("/api/set_pid", HTTP_POST, handleSetPID);
         server.on("/api/set_calib", HTTP_POST, handleSetCalib);
         server.on("/api/set_volt_limits", HTTP_POST, handleSetVoltLimits);
+        server.on("/api/set_wifi", HTTP_POST, handleSetWiFi);
+        server.on("/api/restart", HTTP_POST, handleRestart);
         server.on("/api/save_defaults", HTTP_POST, handleSaveDefaults);
         server.on("/api/restore_defaults", HTTP_POST, handleRestoreDefaults);
         server.on("/api/sd_list", HTTP_GET, handleSDList);
@@ -869,12 +955,19 @@ void toggleWiFi() {
 
         server.begin();
         isWifiAPActive = true;
-        Serial.println("\n[WIFI] SIEC UTWORZONA! Adres: 192.168.5.1\n");
+        Serial.println("\n[WIFI] SIEC AP UTWORZONA! Adres: 192.168.5.1\n");
         triggerBlink(3, 100); 
+    } else {
+        server.stop();
+        WiFi.softAPdisconnect(true);
+        if(routerSSID != "") WiFi.disconnect(true);
+        isWifiAPActive = false;
+        triggerBlink(1, 500); 
     }
 }
+
 void onStationConnected(WiFiEvent_t event, WiFiEventInfo_t info) {
-    Serial.println("\n[WIFI] Telefon polaczyl sie z maszyna!");
+    Serial.println("\n[WIFI] Telefon polaczyl sie z punktem dostepu maszyny!");
     triggerBlink(2, 200); 
 }
 
@@ -952,14 +1045,14 @@ void handleNextionInput() {
         lastNextionResponseTime = millis(); // REJESTRACJA ZYCIA EKRANU 
         
         if (b == 0x65) {                
-            delay(15); // Czekamy aż zbuforuje się bezpiecznie cała ramka (9600 baud = 1 bajt/ms)                  
+            delay(15);                   
             if (NextionSerial.available() >= 6) {
                 byte pageId = NextionSerial.read(); 
                 byte cmpId  = NextionSerial.read(); 
                 byte event  = NextionSerial.read(); 
-                NextionSerial.read(); // Wyrzucenie 0xFF
-                NextionSerial.read(); // Wyrzucenie 0xFF
-                NextionSerial.read(); // Wyrzucenie 0xFF
+                NextionSerial.read(); 
+                NextionSerial.read(); 
+                NextionSerial.read(); 
 
                 if (pageId == 0) {
                     if (cmpId == 11 && event == 0x01) { 
@@ -1019,10 +1112,13 @@ void setup() {
 
     delay(2000); 
     Serial.begin(115200); 
-    Serial.println("\n\n--- SYSTEM V13.9 (PERFECT DIAG & TIMING) ---");
+    Serial.println("\n\n--- SYSTEM V14.0 (WIFI PRO) ---");
 
-    // 1. ZALADOWANIE PAMIECI
+    // 1. ZALADOWANIE PAMIECI I SIECI
     memory.begin("regulator", false); 
+    routerSSID = memory.getString("ssid", "");
+    routerPASS = memory.getString("pass", "");
+
     minLimit = memory.getFloat("minLim", 10.0); 
     maxLimit = memory.getFloat("maxLim", 40.0); 
     Kp = memory.getFloat("kp", 0.5);
@@ -1060,7 +1156,7 @@ void setup() {
 
     // 2. NATYCHMIASTOWY START WIFI 
     WiFi.onEvent(onStationConnected, ARDUINO_EVENT_WIFI_AP_STACONNECTED);
-    toggleWiFi();
+    setupWiFi();
 
     // 3. INICJALIZACJA OSPRZĘTU
     NextionSerial.begin(9600, SERIAL_8N1, PIN_NEXT_RX, PIN_NEXT_TX);
@@ -1156,7 +1252,7 @@ void loop() {
 
     if (clickCount > 0 && (millis() - lastClickTime) > CLICK_TIMEOUT) {
         if (clickCount >= 3) { 
-            toggleWiFi();
+            setupWiFi();
         }
         clickCount = 0; 
     }
@@ -1321,6 +1417,13 @@ void loop() {
              myNex.writeStr("sd.txt", String(gb, 1) + " GB"); 
         } else {
              myNex.writeStr("sd.txt", "NO SD"); 
+        }
+        
+        // PINGUJ ADRES IP DO EKRANU NA PAGE4 (jesli ruter polaczony)
+        if (WiFi.status() == WL_CONNECTED) {
+            myNex.writeStr("page4.ip.txt", WiFi.localIP().toString());
+        } else {
+            myNex.writeStr("page4.ip.txt", "192.168.5.1");
         }
 
         Serial.printf("%lu;%d;%d;%d;%.3f;%.1f;%.0f;%.2f;%.1f;%.1f;%.2f;%.2f;%.2f;%.2f\n", 
