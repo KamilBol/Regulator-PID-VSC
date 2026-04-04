@@ -187,7 +187,7 @@ void initSD() {
         statusSD = true;
         File f = SD.open("/AI_LOG.txt", FILE_APPEND); 
         if(f) {
-            f.println("=== START SYSTEMU - V13.8_ULTIMATE ==="); 
+            f.println("=== START SYSTEMU - V13.9_PERFECT_DIAG ==="); 
             f.close(); 
         }
         Serial.println("[SD] Karta aktywna.");
@@ -245,13 +245,13 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   </style>
 </head>
 <body>
-  <div class="header"><h1>⚙️ Granulator Pro V13.8</h1></div>
+  <div class="header"><h1>⚙️ Granulator Pro V13.9</h1></div>
   
   <div class="nav">
     <button class="tablinks active" onclick="openTab(event, 'Panel')">📊 Panel</button>
     <button class="tablinks" onclick="openTab(event, 'Sensory')">📡 Sensory</button>
     <button class="tablinks" onclick="openTab(event, 'Nastawy')">⚙️ Nastawy</button>
-    <button class="tablinks" onclick="openTab(event, 'SD')">🩺 Diagnostyka & SD</button>
+    <button class="tablinks" onclick="openTab(event, 'SD')">🩺 Diagnostyka</button>
     <button class="tablinks" onclick="openTab(event, 'OTA')">📥 OTA</button>
   </div>
 
@@ -335,7 +335,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     <div class="card">
       <h3 style="margin-top:0; color:var(--pink);">5. Ochrona Falownika (Limity Napięcia DAC)</h3>
       <form onsubmit="saveVoltLimits(event)">
-        <label>Dolna podłoga napięcia [V] (Poniżej której falownik nie zejdzie. Np. 3.5V lub 2.0V dla 4mA)</label>
+        <label>Dolna podłoga napięcia [V] (Poniżej której falownik nie zejdzie)</label>
         <input type="number" step="0.01" id="minV" required>
         <label>Górny sufit napięcia [V] (Maksymalny gaz falownika. Domyślnie: 10.0V)</label>
         <input type="number" step="0.01" id="maxV" required>
@@ -638,11 +638,15 @@ void handleApiHealth() {
     json += "\"nex\":\"" + String(statusNex ? 1 : 0) + "\",";
     
     unsigned long sec = millis() / 1000;
+    unsigned long d = sec / 86400;
+    unsigned long h = (sec % 86400) / 3600;
+    unsigned long m = (sec % 3600) / 60;
+    unsigned long s = sec % 60;
     String upStr = "";
-    if(sec < 60) upStr = String(sec) + " s";
-    else if(sec < 3600) upStr = String(sec/60) + " min";
-    else if(sec < 86400) upStr = String(sec/3600) + "h " + String((sec%3600)/60) + "m";
-    else upStr = String(sec/86400) + "d " + String((sec%86400)/3600) + "h";
+    if (d > 0) upStr = String(d) + "d " + String(h) + "h " + String(m) + "m";
+    else if (h > 0) upStr = String(h) + "h " + String(m) + "m " + String(s) + "s";
+    else if (m > 0) upStr = String(m) + "m " + String(s) + "s";
+    else upStr = String(s) + "s";
     
     json += "\"up\":\"" + upStr + "\",";
     json += "\"heap_pct\":\"" + String(heapPct, 1) + "\",";
@@ -948,12 +952,14 @@ void handleNextionInput() {
         lastNextionResponseTime = millis(); // REJESTRACJA ZYCIA EKRANU 
         
         if (b == 0x65) {                
-            delay(5);                   
-            if (NextionSerial.available() >= 3) {
+            delay(15); // Czekamy aż zbuforuje się bezpiecznie cała ramka (9600 baud = 1 bajt/ms)                  
+            if (NextionSerial.available() >= 6) {
                 byte pageId = NextionSerial.read(); 
                 byte cmpId  = NextionSerial.read(); 
                 byte event  = NextionSerial.read(); 
-                while (NextionSerial.available()) NextionSerial.read(); 
+                NextionSerial.read(); // Wyrzucenie 0xFF
+                NextionSerial.read(); // Wyrzucenie 0xFF
+                NextionSerial.read(); // Wyrzucenie 0xFF
 
                 if (pageId == 0) {
                     if (cmpId == 11 && event == 0x01) { 
@@ -1013,7 +1019,7 @@ void setup() {
 
     delay(2000); 
     Serial.begin(115200); 
-    Serial.println("\n\n--- SYSTEM V13.8 (ULTIMATE EDITION) ---");
+    Serial.println("\n\n--- SYSTEM V13.9 (PERFECT DIAG & TIMING) ---");
 
     // 1. ZALADOWANIE PAMIECI
     memory.begin("regulator", false); 
