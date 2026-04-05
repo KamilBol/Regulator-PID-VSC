@@ -13,9 +13,12 @@
 #include <DHT.h>
 #include <Preferences.h>
 #include <WiFi.h>              
+#include <WiFiClientSecure.h>
 #include <ESPmDNS.h>           
 #include <WebServer.h>         
 #include <Update.h>            
+#include <HTTPClient.h>
+#include <PubSubClient.h>      // BIBLIOTEKA MQTT!
 
 // ================================================================
 // PINOLOGIA
@@ -52,6 +55,10 @@ Adafruit_ADS1115 ads;
 Preferences memory;
 WebServer server(80); 
 
+// --- OBIEKTY MQTT I CHMURY ---
+WiFiClientSecure espClient; 
+PubSubClient mqtt(espClient);
+
 // --- PARAMETRY PID ---
 double Setpoint;
 double Input;
@@ -68,9 +75,13 @@ float maxDacVolt = 10.0;
 float dac1Calib = 0.0;
 float dac2Calib = 0.0;
 
-// --- ZMIENNE SIECIOWE ---
+// --- ZMIENNE SIECIOWE I CHMUROWE ---
 String routerSSID = "";
 String routerPASS = "";
+String mqtt_server = "";
+String mqtt_user = "";
+String mqtt_pass = "";
+String mqtt_id = "Granulator_01";
 
 // ================================================================
 // ZMIENNE GLOBALNE
@@ -95,6 +106,9 @@ unsigned long lastUpdate = 0;
 unsigned long lastFastUpdate = 0;
 unsigned long lastPIDTime = 0;
 unsigned long lastDiagnosticTime = 0;
+
+unsigned long lastMqttReconnect = 0;
+unsigned long lastMqttPublish = 0;
 
 // Zmienne do sekwencji RESET (Page 0)
 unsigned long resetPressTime = 0;
@@ -147,6 +161,8 @@ void updateSettingsScreen();
 bool isResetStage1Active(); 
 void handleRestoreDefaults(); 
 void toggleLocalWiFi(); 
+void performRemoteOTA(String url);
+void mqttCallback(char* topic, byte* payload, unsigned int length);
 
 // ================================================================
 // FUNKCJE POMOCNICZE
@@ -175,30 +191,13 @@ void handleLED() {
     }
 }
 
-void scanI2C() {
-    Serial.println("[I2C] Skanowanie magistrali...");
-    byte error, address;
-    int nDevices = 0; 
-    for(address = 1; address < 127; address++ ) {
-        Wire.beginTransmission(address); 
-        error = Wire.endTransmission();  
-        if (error == 0) {
-            Serial.print("[I2C] Znaleziono: 0x");
-            if (address<16) Serial.print("0"); 
-            Serial.println(address,HEX);       
-            nDevices++;                        
-        }
-    }
-    if (nDevices == 0) Serial.println("[I2C] Brak urzadzen!");
-}
-
 void initSD() {
     SPI.begin(PIN_SD_SCK, PIN_SD_MISO, PIN_SD_MOSI, PIN_SD_CS); 
     if(SD.begin(PIN_SD_CS)) { 
         statusSD = true;
         File f = SD.open("/AI_LOG.txt", FILE_APPEND); 
         if(f) {
-            f.println("=== START SYSTEMU - V14.2_PAGE4_IDS ==="); 
+            f.println("=== START SYSTEMU - V15.0_CLOUD_EDITION ==="); 
             f.close(); 
         }
         Serial.println("[SD] Karta aktywna.");
@@ -242,6 +241,118 @@ void toggleLocalWiFi() {
 }
 
 // ================================================================
+// ZDALNE OTA (POBIERANIE Z GITHUBA PRZEZ MQTT)
+// ================================================================
+void performRemoteOTA(String url) {
+    Serial.println("[OTA] Otrzymano rozkaz aktualizacji z chmury!");
+    Serial.println("[OTA] URL: " + url);
+    stopRegulator(); // Bezpieczenstwo maszyny
+    
+    HTTPClient http;
+    http.begin(url);
+    int httpCode = http.GET();
+    
+    if (httpCode == 200) {
+        int contentLength = http.getSize();
+        Serial.println("[OTA] Rozmiar pliku: " + String(contentLength) + " bajtow.");
+        
+        bool canBegin = Update.begin(contentLength);
+        if (canBegin) {
+            WiFiClient& client = http.getStream();
+            Serial.println("[OTA] Trwa instalacja pliku do pamieci Flash...");
+            size_t written = Update.writeStream(client);
+            if (written == contentLength) {
+                Serial.println("[OTA] Aktualizacja zakonczona sukcesem! Maszyna zrestartuje sie za 3 sekundy.");
+                Update.end();
+                delay(3000);
+                ESP.restart();
+            } else {
+                Serial.println("[OTA] Blad! Zapisano niepelny plik.");
+            }
+        } else {
+            Serial.println("[OTA] Blad braku miejsca w pamieci uC.");
+        }
+    } else {
+        Serial.println("[OTA] Blad pobierania! Kod HTTP: " + String(httpCode));
+    }
+    http.end();
+}
+
+// ================================================================
+// OBSŁUGA CHMURY MQTT (NASŁUCH ROZKAZÓW)
+// ================================================================
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+    String msg = "";
+    for (int i = 0; i < length; i++) {
+        msg += (char)payload[i];
+    }
+    Serial.println("[MQTT] Otrzymano rozkaz: " + msg);
+
+    // Prosty parser rozkazow tekstowych od Serwera na biurku
+    if (msg.startsWith("OTA=")) {
+        String url = msg.substring(4);
+        performRemoteOTA(url);
+    }
+    else if (msg == "SYSTEM=ON") { startRegulator(); }
+    else if (msg == "SYSTEM=OFF") { stopRegulator(); }
+    else if (msg.startsWith("LIMIT_MAX=")) { 
+        maxLimit = msg.substring(10).toFloat(); 
+        updateSettingsScreen(); memory.putFloat("maxLim", maxLimit);
+    }
+}
+
+void handleMQTT() {
+    if (mqtt_server == "" || WiFi.status() != WL_CONNECTED) return;
+
+    if (!mqtt.connected()) {
+        if (millis() - lastMqttReconnect > 5000) {
+            lastMqttReconnect = millis();
+            Serial.print("[MQTT] Proba logowania do chmury...");
+            
+            // Unikalne ID polaczenia zeby nie wyrzucalo innych maszyn
+            String clientId = mqtt_id + "-" + String(random(0xffff), HEX);
+            
+            if (mqtt.connect(clientId.c_str(), mqtt_user.c_str(), mqtt_pass.c_str())) {
+                Serial.println(" SUKCES!");
+                String subTopic = "biuro/" + mqtt_id + "/rozkazy";
+                mqtt.subscribe(subTopic.c_str());
+            } else {
+                Serial.print(" BLAD, kod=");
+                Serial.println(mqtt.state());
+            }
+        }
+    } else {
+        mqtt.loop();
+        // Publikacja danych co 3 sekundy do chmury
+        if (millis() - lastMqttPublish > 3000) {
+            lastMqttPublish = millis();
+            
+            String pubTopic = "biuro/" + mqtt_id + "/dane";
+            String json = "{";
+            json += "\"amp\":" + String(current_Amps, 2) + ",";
+            json += "\"setp\":" + String(Setpoint, 2) + ",";
+            json += "\"sysON\":" + String(systemON ? 1 : 0) + ",";
+            json += "\"trip\":" + String(trippedByOverload ? 1 : 0) + ",";
+            json += "\"volt\":" + String(pzem_u, 1);
+            json += "}";
+            
+            mqtt.publish(pubTopic.c_str(), json.c_str());
+        }
+    }
+}
+
+// ================================================================
+// BRAMKA AUTORYZACJI (Ochroniarz)
+// ================================================================
+bool checkAuth() {
+    if (!server.authenticate("admin", "regpid12")) {
+        server.requestAuthentication();
+        return false;
+    }
+    return true;
+}
+
+// ================================================================
 // STRONA WWW (HTML + CSS + JS) 
 // ================================================================
 const char INDEX_HTML[] PROGMEM = R"rawliteral(
@@ -282,7 +393,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   </style>
 </head>
 <body>
-  <div class="header"><h1>⚙️ Granulator Pro V14.2</h1></div>
+  <div class="header"><h1>⚙️ Granulator Pro V15.0</h1></div>
   
   <div class="nav">
     <button class="tablinks active" onclick="openTab(event, 'Panel')">📊 Panel</button>
@@ -418,8 +529,24 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       </form>
     </div>
 
+    <div class="card" style="border: 2px solid #03a9f4;">
+      <h3 style="margin-top:0; color:#03a9f4;">9. Chmura MQTT (Zdalne Sterowanie i OTA)</h3>
+      <p style="font-size:12px; color:#aaa;">Wprowadź dane z HiveMQ. Port 8883 (TLS) jest ustawiony w kodzie automatycznie.</p>
+      <form onsubmit="saveMQTT(event)">
+        <label>Adres Brokera (Cluster URL)</label>
+        <input type="text" id="mqSrv" placeholder="xyz.s1.eu.hivemq.cloud">
+        <label>Użytkownik MQTT (Credentials Username)</label>
+        <input type="text" id="mqUsr">
+        <label>Hasło MQTT (Credentials Password)</label>
+        <input type="password" id="mqPas">
+        <label>Unikalne ID Maszyny (np. Granulator_01)</label>
+        <input type="text" id="mqId">
+        <button type="submit" class="submit-btn" style="background:#03a9f4; color:#fff;">ZAPISZ MQTT (Restart)</button>
+      </form>
+    </div>
+
     <div class="card" style="border: 2px solid var(--yellow);">
-      <h3 style="margin-top:0; color:var(--yellow);">9. Ustawienia Domyślne Systemu</h3>
+      <h3 style="margin-top:0; color:var(--yellow);">10. Ustawienia Domyślne Systemu</h3>
       <p style="font-size:13px; color:#aaa;">Zapisz obecną, idealną konfigurację jako wzorzec awaryjny.</p>
       <button onclick="saveDefaults()" class="submit-btn" style="background:var(--yellow); color:#000;">ZAPISZ OBECNE JAKO DOMYŚLNE</button>
       <button onclick="restoreDefaults()" class="submit-btn" style="background:var(--red); color:#fff; margin-top:10px;">PRZYWRÓĆ USTAWIENIA DOMYŚLNE</button>
@@ -458,7 +585,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
 
   <div id="OTA" class="tab-content">
     <div class="card">
-      <h3 style="margin-top:0; color:var(--red);">Aktualizacja Systemu (OTA)</h3>
+      <h3 style="margin-top:0; color:var(--red);">Aktualizacja Systemu (OTA Lokalne)</h3>
       <p style="font-size:14px; color:#aaa;">Wybierz plik .bin z najnowszą wersją oprogramowania.</p>
       <form method="POST" action="#" enctype="multipart/form-data" id="upload_form">
         <input type="file" name="update" id="file" accept=".bin" required style="padding: 10px 0;">
@@ -534,6 +661,9 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
             document.getElementById('minV').value = data.minV;
             document.getElementById('maxV').value = data.maxV;
             document.getElementById('wifiSSID').value = data.wifi_s;
+            document.getElementById('mqSrv').value = data.mq_srv;
+            document.getElementById('mqUsr').value = data.mq_usr;
+            document.getElementById('mqId').value = data.mq_id;
         }
       });
     }, 1000);
@@ -586,6 +716,18 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       let p = document.getElementById('wifiPASS').value;
       fetch('/api/set_wifi?s='+encodeURIComponent(s)+'&p='+encodeURIComponent(p), {method: 'POST'}).then(() => {
           alert("Dane sieci zapisane! Maszyna zrestartuje się, aby połączyć z routerem.");
+          setTimeout(() => location.reload(), 8000);
+      });
+    }
+
+    function saveMQTT(e) {
+      e.preventDefault();
+      let srv = document.getElementById('mqSrv').value;
+      let usr = document.getElementById('mqUsr').value;
+      let pas = document.getElementById('mqPas').value;
+      let id = document.getElementById('mqId').value;
+      fetch('/api/set_mqtt?srv='+encodeURIComponent(srv)+'&usr='+encodeURIComponent(usr)+'&pas='+encodeURIComponent(pas)+'&id='+encodeURIComponent(id), {method: 'POST'}).then(() => {
+          alert("Dane chmury MQTT zapisane! Maszyna zrestartuje się, aby nawiązać połączenie.");
           setTimeout(() => location.reload(), 8000);
       });
     }
@@ -662,9 +804,13 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
 // ================================================================
 // FUNKCJE SERWERA WWW I API
 // ================================================================
-void handleRoot() { server.send(200, "text/html", INDEX_HTML); }
+void handleRoot() { 
+    if(!checkAuth()) return;
+    server.send(200, "text/html", INDEX_HTML); 
+}
 
 void handleApiData() {
+    if(!checkAuth()) return;
     String json = "{";
     json += "\"amp\":\"" + String(current_Amps, 2) + "\",";
     json += "\"setp\":\"" + String(Setpoint, 2) + "\",";
@@ -694,12 +840,16 @@ void handleApiData() {
     json += "\"dac2C\":\"" + String(dac2Calib, 2) + "\",";
     json += "\"minV\":\"" + String(minDacVolt, 2) + "\",";
     json += "\"maxV\":\"" + String(maxDacVolt, 2) + "\",";
-    json += "\"wifi_s\":\"" + routerSSID + "\"";
+    json += "\"wifi_s\":\"" + routerSSID + "\",";
+    json += "\"mq_srv\":\"" + mqtt_server + "\",";
+    json += "\"mq_usr\":\"" + mqtt_user + "\",";
+    json += "\"mq_id\":\"" + mqtt_id + "\"";
     json += "}";
     server.send(200, "application/json", json);
 }
 
 void handleApiHealth() {
+    if(!checkAuth()) return;
     bool statusNex = (millis() - lastNextionResponseTime < 5000); 
     float heapPct = ((float)ESP.getFreeHeap() / ESP.getHeapSize()) * 100.0;
     
@@ -736,15 +886,18 @@ void handleApiHealth() {
 }
 
 void handleToggleSys() {
+    if(!checkAuth()) return;
     if(systemON) stopRegulator(); else startRegulator();
     server.send(200, "text/plain", "OK");
 }
 void handleToggleMode() {
+    if(!checkAuth()) return;
     modeAUTO = !modeAUTO;
     myNex.writeStr("pracaautoman.txt", modeAUTO ? "AUT" : "MAN");
     server.send(200, "text/plain", "OK");
 }
 void handleSetOutMode() {
+    if(!checkAuth()) return;
     if (server.hasArg("m")) {
         outMode = server.arg("m").toInt();
         applyOutputMode();
@@ -753,6 +906,7 @@ void handleSetOutMode() {
     server.send(200, "text/plain", "OK");
 }
 void handleSetRatios() {
+    if(!checkAuth()) return;
     if (server.hasArg("r1") && server.hasArg("r2")) {
         dac1Ratio = server.arg("r1").toFloat();
         dac2Ratio = server.arg("r2").toFloat();
@@ -765,6 +919,7 @@ void handleSetRatios() {
     server.send(200, "text/plain", "OK");
 }
 void handleSetAlarms() {
+    if(!checkAuth()) return;
     if (server.hasArg("ov") && server.hasArg("rec")) {
         overloadLimit = server.arg("ov").toFloat();
         recoveryLimit = server.arg("rec").toFloat();
@@ -775,6 +930,7 @@ void handleSetAlarms() {
     server.send(200, "text/plain", "OK");
 }
 void handleSetLimits() {
+    if(!checkAuth()) return;
     if (server.hasArg("min") && server.hasArg("max")) {
         minLimit = server.arg("min").toFloat();
         maxLimit = server.arg("max").toFloat();
@@ -786,6 +942,7 @@ void handleSetLimits() {
     server.send(200, "text/plain", "OK");
 }
 void handleSetPID() {
+    if(!checkAuth()) return;
     if (server.hasArg("kp") && server.hasArg("ki") && server.hasArg("kd")) {
         Kp = server.arg("kp").toFloat();
         Ki = server.arg("ki").toFloat();
@@ -799,6 +956,7 @@ void handleSetPID() {
     server.send(200, "text/plain", "OK");
 }
 void handleSetCalib() {
+    if(!checkAuth()) return;
     if (server.hasArg("c1") && server.hasArg("c2")) {
         dac1Calib = server.arg("c1").toFloat();
         dac2Calib = server.arg("c2").toFloat();
@@ -810,6 +968,7 @@ void handleSetCalib() {
     server.send(200, "text/plain", "OK");
 }
 void handleSetVoltLimits() {
+    if(!checkAuth()) return;
     if (server.hasArg("min") && server.hasArg("max")) {
         minDacVolt = server.arg("min").toFloat();
         maxDacVolt = server.arg("max").toFloat();
@@ -828,6 +987,7 @@ void handleSetVoltLimits() {
 }
 
 void handleSetWiFi() {
+    if(!checkAuth()) return;
     if (server.hasArg("s") && server.hasArg("p")) {
         routerSSID = server.arg("s");
         routerPASS = server.arg("p");
@@ -839,13 +999,34 @@ void handleSetWiFi() {
     }
 }
 
+void handleSetMQTT() {
+    if(!checkAuth()) return;
+    if (server.hasArg("srv") && server.hasArg("usr") && server.hasArg("pas") && server.hasArg("id")) {
+        mqtt_server = server.arg("srv");
+        mqtt_user = server.arg("usr");
+        mqtt_pass = server.arg("pas");
+        mqtt_id = server.arg("id");
+        
+        memory.putString("mq_srv", mqtt_server);
+        memory.putString("mq_usr", mqtt_user);
+        memory.putString("mq_pas", mqtt_pass);
+        memory.putString("mq_id", mqtt_id);
+        
+        server.send(200, "text/plain", "OK");
+        delay(500);
+        ESP.restart();
+    }
+}
+
 void handleRestart() {
+    if(!checkAuth()) return;
     server.send(200, "text/plain", "OK");
     delay(500);
     ESP.restart();
 }
 
 void handleSaveDefaults() {
+    if(!checkAuth()) return;
     memory.putFloat("d_minL", minLimit);
     memory.putFloat("d_maxL", maxLimit);
     memory.putFloat("d_kp", Kp);
@@ -863,6 +1044,7 @@ void handleSaveDefaults() {
 }
 
 void handleRestoreDefaults() {
+    if(!checkAuth()) return;
     minLimit = memory.getFloat("d_minL", 10.0);
     maxLimit = memory.getFloat("d_maxL", 40.0);
     Kp = memory.getFloat("d_kp", 0.5);
@@ -889,10 +1071,13 @@ void handleRestoreDefaults() {
     memory.putFloat("maxDacVolt", maxDacVolt);
     memory.putInt("outMode", outMode);
     
-    // CZYSZCZENIE DANYCH ROUTERA PRZY RECOVERY (POWRÓT DO TRYBU AP ONLY)
+    // CZYSZCZENIE DANYCH ROUTERA I CHMURY PRZY RECOVERY (POWRÓT DO TRYBU AP ONLY)
     memory.putString("ssid", "");
     memory.putString("pass", "");
-    memory.putInt("apState", 1); // Wymuszamy włączenie sieci maszynowej
+    memory.putString("mq_srv", "");
+    memory.putString("mq_usr", "");
+    memory.putString("mq_pas", "");
+    memory.putInt("apState", 1); 
 
     myPID.SetTunings(Kp, Ki, Kd);
     applyOutputMode();
@@ -903,6 +1088,7 @@ void handleRestoreDefaults() {
 }
 
 void handleSDList() {
+    if(!checkAuth()) return;
     if(SD.cardType() == CARD_NONE) { server.send(200, "application/json", "[]"); return; }
     File root = SD.open("/");
     String json = "[";
@@ -918,6 +1104,7 @@ void handleSDList() {
     server.send(200, "application/json", json);
 }
 void handleSDRead() {
+    if(!checkAuth()) return;
     if (!server.hasArg("f")) { server.send(400, "text/plain", "Brak pliku"); return; }
     String path = "/" + server.arg("f");
     File file = SD.open(path, FILE_READ);
@@ -929,7 +1116,6 @@ void handleSDRead() {
 void setupWiFi() {
     int apState = memory.getInt("apState", 1);
     
-    // TWARDE CZYSZCZENIE CACHE'U PRZED NOWYM POŁĄCZENIEM
     WiFi.disconnect(true);
     WiFi.softAPdisconnect(true);
     delay(100);
@@ -949,8 +1135,10 @@ void setupWiFi() {
         IPAddress gateway(192, 168, 5, 1);
         IPAddress subnet(255, 255, 255, 0);
         WiFi.softAPConfig(local_ip, gateway, subnet);
-        WiFi.softAP("RegulatorPID", "regpid12"); 
-        Serial.println("[WIFI] Otwarto wewnetrzna siec maszyny (AP).");
+        
+        // SIEĆ AP ZAWSZE OTWARTA - BEZ HASLA WPA2!
+        WiFi.softAP("RegulatorPID"); 
+        Serial.println("[WIFI] Otwarto OTWARTA wewnetrzna siec maszyny (AP).");
     }
 
     if (MDNS.begin("granulator")) {
@@ -970,6 +1158,7 @@ void setupWiFi() {
     server.on("/api/set_calib", HTTP_POST, handleSetCalib);
     server.on("/api/set_volt_limits", HTTP_POST, handleSetVoltLimits);
     server.on("/api/set_wifi", HTTP_POST, handleSetWiFi);
+    server.on("/api/set_mqtt", HTTP_POST, handleSetMQTT);
     server.on("/api/restart", HTTP_POST, handleRestart);
     server.on("/api/save_defaults", HTTP_POST, handleSaveDefaults);
     server.on("/api/restore_defaults", HTTP_POST, handleRestoreDefaults);
@@ -977,10 +1166,12 @@ void setupWiFi() {
     server.on("/sd_read", HTTP_GET, handleSDRead);
     
     server.on("/update", HTTP_POST, []() {
+        if(!checkAuth()) return;
         server.sendHeader("Connection", "close");
         server.send(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
         ESP.restart();
     }, []() {
+        if(!checkAuth()) return;
         HTTPUpload& upload = server.upload();
         if (upload.status == UPLOAD_FILE_START) {
             if (!Update.begin(UPDATE_SIZE_UNKNOWN)) { Update.printError(Serial); }
@@ -1020,11 +1211,9 @@ void startRegulator() {
     if (currentDac1 < minDacVolt) currentDac1 = minDacVolt;
     if (currentDac2 < minDacVolt) currentDac2 = minDacVolt;
 
-    // Aplikacja Offsetu Kalibracyjnego
     float finalDac1 = currentDac1 + dac1Calib;
     float finalDac2 = currentDac2 + dac2Calib;
     
-    // Twardy programowy kaganiec inteligentny
     if (finalDac1 < 0.0) finalDac1 = 0.0;
     if (finalDac1 > maxDacVolt) finalDac1 = maxDacVolt;
     if (finalDac2 < 0.0) finalDac2 = 0.0;
@@ -1093,7 +1282,6 @@ void handleNextionInput() {
                         myNex.writeStr("pracaautoman.txt", modeAUTO ? "AUT" : "MAN"); 
                     }
                     if (cmpId == 8) { 
-                        // OBSLUGA WZROKOWA RESETU EKRANU GLOWNEGO
                         if (event == 0x01) { 
                             isResetPressed = true; 
                             resetPressTime = millis(); 
@@ -1119,19 +1307,16 @@ void handleNextionInput() {
                 }
 
                 if (pageId == 4) {
-                    // GUZIK DO WYLACZANIA / WLACZANIA LOKALNEGO WIFI (ZMIENIONE ID = 7)
                     if (cmpId == 7 && event == 0x01) { 
                         toggleLocalWiFi();
                     }
-                    
-                    // GUZIK DO RESETU DO USTAWIEŃ FABRYCZNYCH I CZYSZCZENIA DANYCH ROUTERA (ZMIENIONE ID = 8)
                     if (cmpId == 8) {
                         if (event == 0x01) {
                             isFactoryResetPressed = true;
                             factoryResetPressTime = millis();
                         } else if (event == 0x00) {
                             isFactoryResetPressed = false;
-                            myNex.writeNum("page4.bco", 65535); // Cofniecie zmiany tla
+                            myNex.writeNum("page4.bco", 65535); 
                         }
                     }
                 }
@@ -1159,12 +1344,15 @@ void setup() {
 
     delay(2000); 
     Serial.begin(115200); 
-    Serial.println("\n\n--- SYSTEM V14.2 (PAGE4 IDS) ---");
+    Serial.println("\n\n--- SYSTEM V15.0 (CLOUD EDITION) ---");
 
-    // 1. ZALADOWANIE PAMIECI I SIECI
     memory.begin("regulator", false); 
     routerSSID = memory.getString("ssid", "");
     routerPASS = memory.getString("pass", "");
+    mqtt_server = memory.getString("mq_srv", "");
+    mqtt_user = memory.getString("mq_usr", "");
+    mqtt_pass = memory.getString("mq_pas", "");
+    mqtt_id = memory.getString("mq_id", "Granulator_01");
 
     minLimit = memory.getFloat("minLim", 10.0); 
     maxLimit = memory.getFloat("maxLim", 40.0); 
@@ -1201,11 +1389,14 @@ void setup() {
     if (isnan(dac1Calib)) dac1Calib = 0.0;
     if (isnan(dac2Calib)) dac2Calib = 0.0;
 
-    // 2. NATYCHMIASTOWY START WIFI (DUAL MODE)
+    // INICJALIZACJA MQTT Z TLS BEZ SPRAWDZANIA CERTYFIKATU (Insecure)
+    espClient.setInsecure();
+    mqtt.setServer(mqtt_server.c_str(), 8883);
+    mqtt.setCallback(mqttCallback);
+
     WiFi.onEvent(onStationConnected, ARDUINO_EVENT_WIFI_AP_STACONNECTED);
     setupWiFi();
 
-    // 3. INICJALIZACJA OSPRZĘTU
     NextionSerial.begin(9600, SERIAL_8N1, PIN_NEXT_RX, PIN_NEXT_TX);
     myNex.begin(9600);
     PzemSerial.begin(9600, SERIAL_8N1, PIN_PZEM_RX, PIN_PZEM_TX);
@@ -1243,6 +1434,7 @@ void setup() {
 // ================================================================
 void loop() {
     handleLED(); 
+    handleMQTT();
 
     if (isWifiAPActive) {
         server.handleClient();
@@ -1250,7 +1442,6 @@ void loop() {
 
     handleNextionInput(); 
 
-    // --- ANIMACJA I OBSŁUGA TWARDEGO RESETU (PAGE 0) ---
     if (isResetPressed) {
         unsigned long holdTime = millis() - resetPressTime;
         
@@ -1276,13 +1467,12 @@ void loop() {
         }
     }
 
-    // --- ANIMACJA I OBSLUGA RESETU FABRYCZNEGO (PAGE 4) ---
     if (isFactoryResetPressed) {
         unsigned long holdTime = millis() - factoryResetPressTime;
         if (holdTime > 3000) {
-            myNex.writeNum("page4.bco", 0); // Ekran gasnie
+            myNex.writeNum("page4.bco", 0); 
             delay(500);
-            handleRestoreDefaults(); // Ta funkcja kasuje router, wlacza AP i resetuje ESP
+            handleRestoreDefaults(); 
         }
     }
 
@@ -1313,7 +1503,6 @@ void loop() {
         clickCount = 0; 
     }
 
-    // --- PĘTLA DIAGNOSTYCZNA (Co 2 sekundy) ---
     if (millis() - lastDiagnosticTime >= 2000) {
         lastDiagnosticTime = millis();
         
@@ -1334,7 +1523,6 @@ void loop() {
         NextionSerial.write(0xFF);
     }
 
-    // --- SZYBKA PĘTLA (50ms - Napięcia) ---
     if (millis() - lastFastUpdate >= 50) {
         lastFastUpdate = millis(); 
 
@@ -1381,7 +1569,6 @@ void loop() {
         }
     }
 
-    // --- PĘTLA PID (200ms) ---
     if (millis() - lastPIDTime >= 200) {
         lastPIDTime = millis();
         float i = pzem.current();
@@ -1417,7 +1604,6 @@ void loop() {
         }
     }
 
-    // --- WOLNA PĘTLA EKRANU I SERIAL LOGGERA (1000ms) ---
     if (millis() - lastUpdate >= 1000) {
         lastUpdate = millis(); 
         pzem_u = pzem.voltage();
@@ -1470,7 +1656,6 @@ void loop() {
              myNex.writeStr("sd.txt", "NO SD"); 
         }
         
-        // --- AKTUALIZACJA DANYCH NA PAGE4 (IP + STAN LOKALNEGO WIFI) ---
         if (WiFi.status() == WL_CONNECTED) {
             myNex.writeStr("page4.ip.txt", WiFi.localIP().toString());
         } else {
@@ -1485,7 +1670,6 @@ void loop() {
     }
 }
 
-// Funkcja pomocnicza do wstrzymywania aktualizacji podczas kasowania
 bool isResetStage1Active() {
     return resetStage3;
 }
