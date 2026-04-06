@@ -1,5 +1,5 @@
 // ================================================================
-// SERWER DYSPOZYTORSKI (CENTRUM DOWODZENIA) - V1.0
+// SERWER DYSPOZYTORSKI (CENTRUM DOWODZENIA) - V1.1 FIX
 // ================================================================
 #include <Arduino.h>
 #include <WiFi.h>              
@@ -26,7 +26,6 @@ String mqtt_pass = "";
 String target_machine_id = "Granulator_01"; // Do jakiej maszyny wysylamy rozkazy
 
 // --- BUFOR DANYCH Z HALI ---
-// Tutaj przechowujemy ostatnia paczke JSON jaka przyszla z maszyny
 String latest_machine_data = "{\"amp\":0,\"setp\":0,\"sysON\":0,\"trip\":0,\"volt\":0}";
 
 unsigned long lastMqttReconnect = 0;
@@ -78,13 +77,14 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     
     .status-dot { height: 12px; width: 12px; background-color: var(--red); border-radius: 50%; display: inline-block; margin-right: 8px;}
     .status-ok { background-color: var(--green); box-shadow: 0 0 10px var(--green);}
+    .status-wait { background-color: var(--orange); box-shadow: 0 0 10px var(--orange);}
   </style>
 </head>
 <body>
   <div class="header">
     <h1>📡 Serwer Dyspozytorski</h1>
     <div style="margin-top:10px; font-size:14px; color:#aaa;">
-      <span id="mqtt-dot" class="status-dot"></span><span id="mqtt-txt">Chmura rozłączona</span>
+      <span id="mqtt-dot" class="status-dot"></span><span id="mqtt-txt">Brak połączenia z siecią domową WiFi</span>
     </div>
   </div>
 
@@ -138,15 +138,15 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
 
     <div class="card">
       <h3>⚙️ Konfiguracja tego Serwera</h3>
-      <p style="font-size:12px; color:#aaa;">Z kim ten panel ma się komunikować?</p>
+      <p style="font-size:12px; color:#aaa;">Z kim ten panel ma się komunikować? <br><b>Obecne IP Serwera:</b> <span id="srvIP" style="color:var(--accent);">--</span></p>
       <form onsubmit="saveConfig(event)">
         <label>ID Docelowej Maszyny (Z kim gadamy?)</label>
         <input type="text" id="c_tid" required>
-        <label>WiFi SSID (Router w domu)</label>
+        <label>WiFi SSID (Router w biurze/domu)</label>
         <input type="text" id="c_ssid">
         <label>WiFi Hasło</label>
         <input type="password" id="c_pass">
-        <label>MQTT Adres Brokera (HiveMQ)</label>
+        <label>MQTT Adres Brokera (HiveMQ Cluster URL)</label>
         <input type="text" id="c_msrv">
         <label>MQTT Użytkownik</label>
         <input type="text" id="c_musr">
@@ -204,10 +204,8 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       });
     }
 
-    // Odswiezanie danych z chmury co 1 sekunde
     setInterval(() => {
       fetch('/api/machine_data').then(r => r.json()).then(data => {
-        // Data to po prostu przeklejony JSON od maszyny
         document.getElementById('val-amp').innerText = data.amp + " A";
         document.getElementById('val-setp').innerText = data.setp + " A";
         document.getElementById('val-volt').innerText = data.volt + " V";
@@ -236,20 +234,24 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       });
     }, 1000);
 
-    // Odswiezanie statusu samego serwera
     setInterval(() => {
       fetch('/api/server_status').then(r => r.json()).then(data => {
         let dot = document.getElementById('mqtt-dot');
         let txt = document.getElementById('mqtt-txt');
-        if(data.mqtt_connected) {
+        
+        if(!data.wifi_connected) {
+            dot.className = "status-dot";
+            txt.innerText = "Brak internetu (Zły SSID lub hasło WiFi)";
+        } else if(!data.mqtt_connected) {
+            dot.className = "status-dot status-wait";
+            txt.innerText = "WiFi OK! Szukam chmury HiveMQ...";
+        } else {
             dot.className = "status-dot status-ok";
             txt.innerText = "Chmura Połączona (" + data.target_id + ")";
-        } else {
-            dot.className = "status-dot";
-            txt.innerText = "Szukanie chmury...";
         }
 
-        // Aktualizacja pól configu jeśli nie są w focusie
+        document.getElementById('srvIP').innerText = data.ip;
+
         if(document.activeElement.tagName !== "INPUT") {
             document.getElementById('c_tid').value = data.target_id;
             document.getElementById('c_ssid').value = data.ssid;
@@ -274,14 +276,15 @@ void handleRoot() {
 
 void handleMachineData() {
     if(!checkAuth()) return;
-    // Zwracamy przegladarce surowy tekst jaki dostalismy z MQTT od Maszyny
     server.send(200, "application/json", latest_machine_data);
 }
 
 void handleServerStatus() {
     if(!checkAuth()) return;
     String json = "{";
+    json += "\"wifi_connected\":" + String((WiFi.status() == WL_CONNECTED) ? "true" : "false") + ",";
     json += "\"mqtt_connected\":" + String(mqtt.connected() ? "true" : "false") + ",";
+    json += "\"ip\":\"" + WiFi.localIP().toString() + "\",";
     json += "\"target_id\":\"" + target_machine_id + "\",";
     json += "\"ssid\":\"" + routerSSID + "\",";
     json += "\"mqtt_srv\":\"" + mqtt_server + "\",";
@@ -331,7 +334,6 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     String msg = "";
     for (int i = 0; i < length; i++) msg += (char)payload[i];
     
-    // Jesli to sa dane z docelowej maszyny, zapisujemy do pamieci RAM (Dla WebUI)
     String expectedTopic = "biuro/" + target_machine_id + "/dane";
     if (String(topic) == expectedTopic) {
         latest_machine_data = msg; 
@@ -339,23 +341,24 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 }
 
 void handleMQTT() {
-    if (mqtt_server == "" || WiFi.status() != WL_CONNECTED) return;
+    // 1. ZELAZNA BLOKADA: Nie probuj laczyc z MQTT jesli brak konfiguracji lub brak polaczenia z internetem (Routerem)
+    if (mqtt_server == "" || routerSSID == "") return;
+    if (WiFi.status() != WL_CONNECTED || WiFi.localIP().toString() == "0.0.0.0") return;
 
     if (!mqtt.connected()) {
         if (millis() - lastMqttReconnect > 5000) {
             lastMqttReconnect = millis();
-            Serial.print("[MQTT] Proba polaczenia Serwera z chmura...");
+            Serial.print("[MQTT] Serwer ma dostep do internetu! Proba polaczenia z chmura: " + mqtt_server + "...");
             
             String clientId = "SerwerBiurko-" + String(random(0xffff), HEX);
             if (mqtt.connect(clientId.c_str(), mqtt_user.c_str(), mqtt_pass.c_str())) {
                 Serial.println(" SUKCES!");
                 
-                // Serwer NASŁUCHUJE danych od maszyny
                 String subTopic = "biuro/" + target_machine_id + "/dane";
                 mqtt.subscribe(subTopic.c_str());
-                Serial.println("[MQTT] Nasluchuje informacji z: " + subTopic);
+                Serial.println("[MQTT] Nasluchuje informacji od maszyny: " + subTopic);
             } else {
-                Serial.println(" BLAD!");
+                Serial.println(" BLAD, zly login/haslo MQTT?");
             }
         }
     } else {
@@ -387,21 +390,23 @@ void setup() {
     if (routerSSID != "") {
         WiFi.mode(WIFI_AP_STA);
         WiFi.begin(routerSSID.c_str(), routerPASS.c_str());
+        Serial.println("[WIFI] Proba polaczenia z routerem...");
     } else {
         WiFi.mode(WIFI_AP);
+        Serial.println("[WIFI] Brak danych routera. Start w trybie tylko AP.");
     }
     
-    IPAddress local_ip(192, 168, 10, 1); // Serwer ma inna pule niz maszyna!
+    IPAddress local_ip(192, 168, 10, 1); 
     IPAddress gateway(192, 168, 10, 1);
     IPAddress subnet(255, 255, 255, 0);
     WiFi.softAPConfig(local_ip, gateway, subnet);
-    WiFi.softAP("Granulator_SERWER"); // Otwarta siec do awaryjnej konfiguracji serwera
+    WiFi.softAP("Granulator_SERWER"); 
 
     if (MDNS.begin("granulator-serwer")) {
         Serial.println("[mDNS] Adres serwera w domu to: http://granulator-serwer.local");
     }
 
-    espClient.setInsecure(); // Wymagane dla darmowego HiveMQ Cloud z portem 8883
+    espClient.setInsecure(); 
     mqtt.setServer(mqtt_server.c_str(), 8883);
     mqtt.setCallback(mqttCallback);
 
@@ -419,6 +424,5 @@ void loop() {
     server.handleClient();
     handleMQTT();
     
-    // Miganie diody - sygnalizacja ze serwer zyje
     if(millis() % 1000 < 50) digitalWrite(PIN_LED, HIGH); else digitalWrite(PIN_LED, LOW);
 }
