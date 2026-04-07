@@ -18,7 +18,7 @@
 #include <WebServer.h>         
 #include <Update.h>            
 #include <HTTPClient.h>
-#include <PubSubClient.h>      // BIBLIOTEKA MQTT!
+#include <PubSubClient.h>
 
 // ================================================================
 // PINOLOGIA
@@ -167,6 +167,18 @@ void mqttCallback(char* topic, byte* payload, unsigned int length);
 // ================================================================
 // FUNKCJE POMOCNICZE
 // ================================================================
+String cleanHostAddress(String host) {
+    String clean = host;
+    clean.replace("http://", "");
+    clean.replace("https://", "");
+    int colonIndex = clean.indexOf(':');
+    if (colonIndex > 0) {
+        clean = clean.substring(0, colonIndex); 
+    }
+    clean.trim();
+    return clean;
+}
+
 void triggerBlink(int times, int duration) {
     blinkMax = times * 2; 
     blinkCount = 0;
@@ -197,7 +209,7 @@ void initSD() {
         statusSD = true;
         File f = SD.open("/AI_LOG.txt", FILE_APPEND); 
         if(f) {
-            f.println("=== START SYSTEMU - V15.0_CLOUD_EDITION ==="); 
+            f.println("=== START SYSTEMU - V15.1_CLOUD_FIX ==="); 
             f.close(); 
         }
         Serial.println("[SD] Karta aktywna.");
@@ -231,7 +243,7 @@ void toggleLocalWiFi() {
         IPAddress gateway(192, 168, 5, 1);
         IPAddress subnet(255, 255, 255, 0);
         WiFi.softAPConfig(local_ip, gateway, subnet);
-        WiFi.softAP("RegulatorPID", "regpid12");
+        WiFi.softAP("RegulatorPID");
         Serial.println("[WIFI] Siec Lokalna (AP) WLACZONA.");
     } else {
         WiFi.softAPdisconnect(true);
@@ -246,7 +258,7 @@ void toggleLocalWiFi() {
 void performRemoteOTA(String url) {
     Serial.println("[OTA] Otrzymano rozkaz aktualizacji z chmury!");
     Serial.println("[OTA] URL: " + url);
-    stopRegulator(); // Bezpieczenstwo maszyny
+    stopRegulator(); 
     
     HTTPClient http;
     http.begin(url);
@@ -288,7 +300,6 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     }
     Serial.println("[MQTT] Otrzymano rozkaz: " + msg);
 
-    // Prosty parser rozkazow tekstowych od Serwera na biurku
     if (msg.startsWith("OTA=")) {
         String url = msg.substring(4);
         performRemoteOTA(url);
@@ -302,14 +313,20 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 }
 
 void handleMQTT() {
-    if (mqtt_server == "" || WiFi.status() != WL_CONNECTED) return;
+    // Twarda blokada jesli brak routera lub neta
+    if (mqtt_server == "" || routerSSID == "") return;
+    if (WiFi.status() != WL_CONNECTED || WiFi.localIP().toString() == "0.0.0.0") return;
 
     if (!mqtt.connected()) {
-        if (millis() - lastMqttReconnect > 5000) {
+        // Zwiększony timeout na 15 sekund, by odblokować WebUI na telefonie!
+        if (millis() - lastMqttReconnect > 15000) {
             lastMqttReconnect = millis();
-            Serial.print("[MQTT] Proba logowania do chmury...");
             
-            // Unikalne ID polaczenia zeby nie wyrzucalo innych maszyn
+            // Oczyszczanie starego gniazda TLS przed próbą nowego
+            espClient.stop(); 
+            espClient.setInsecure();
+            
+            Serial.print("[MQTT] Proba logowania do chmury...");
             String clientId = mqtt_id + "-" + String(random(0xffff), HEX);
             
             if (mqtt.connect(clientId.c_str(), mqtt_user.c_str(), mqtt_pass.c_str())) {
@@ -393,7 +410,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   </style>
 </head>
 <body>
-  <div class="header"><h1>⚙️ Granulator Pro V15.0</h1></div>
+  <div class="header"><h1>⚙️ Granulator Pro V15.1</h1></div>
   
   <div class="nav">
     <button class="tablinks active" onclick="openTab(event, 'Panel')">📊 Panel</button>
@@ -519,7 +536,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
 
     <div class="card">
       <h3 style="margin-top:0; color:#4caf50;">8. Sieć WiFi (Połączenie z Routerem)</h3>
-      <p style="font-size:12px; color:#aaa;">Prywatna sieć AP "RegulatorPID" (hasło: regpid12) jest aktywna zawsze jako awaryjna.</p>
+      <p style="font-size:12px; color:#aaa;">Prywatna sieć AP "RegulatorPID" jest aktywna zawsze jako awaryjna.</p>
       <form onsubmit="saveWiFi(event)">
         <label>Nazwa sieci WiFi (SSID)</label>
         <input type="text" id="wifiSSID">
@@ -644,7 +661,6 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         document.getElementById('temp').innerText = data.temp + " °C";
         document.getElementById('hum').innerText = data.hum + " %";
 
-        // BLOKADA ODŚWIEŻANIA PÓL NA 10 SEKUND
         if (Date.now() - lastFocusTime > 10000) {
             document.getElementById('outMode').value = data.outM;
             document.getElementById('dac1r').value = data.dac1R;
@@ -1002,7 +1018,7 @@ void handleSetWiFi() {
 void handleSetMQTT() {
     if(!checkAuth()) return;
     if (server.hasArg("srv") && server.hasArg("usr") && server.hasArg("pas") && server.hasArg("id")) {
-        mqtt_server = server.arg("srv");
+        mqtt_server = cleanHostAddress(server.arg("srv"));
         mqtt_user = server.arg("usr");
         mqtt_pass = server.arg("pas");
         mqtt_id = server.arg("id");
@@ -1136,7 +1152,6 @@ void setupWiFi() {
         IPAddress subnet(255, 255, 255, 0);
         WiFi.softAPConfig(local_ip, gateway, subnet);
         
-        // SIEĆ AP ZAWSZE OTWARTA - BEZ HASLA WPA2!
         WiFi.softAP("RegulatorPID"); 
         Serial.println("[WIFI] Otwarto OTWARTA wewnetrzna siec maszyny (AP).");
     }
@@ -1344,7 +1359,7 @@ void setup() {
 
     delay(2000); 
     Serial.begin(115200); 
-    Serial.println("\n\n--- SYSTEM V15.0 (CLOUD EDITION) ---");
+    Serial.println("\n\n--- SYSTEM V15.1 (CLOUD FIX EDITION) ---");
 
     memory.begin("regulator", false); 
     routerSSID = memory.getString("ssid", "");
@@ -1353,6 +1368,8 @@ void setup() {
     mqtt_user = memory.getString("mq_usr", "");
     mqtt_pass = memory.getString("mq_pas", "");
     mqtt_id = memory.getString("mq_id", "Granulator_01");
+
+    mqtt_server = cleanHostAddress(mqtt_server);
 
     minLimit = memory.getFloat("minLim", 10.0); 
     maxLimit = memory.getFloat("maxLim", 40.0); 
@@ -1389,7 +1406,6 @@ void setup() {
     if (isnan(dac1Calib)) dac1Calib = 0.0;
     if (isnan(dac2Calib)) dac2Calib = 0.0;
 
-    // INICJALIZACJA MQTT Z TLS BEZ SPRAWDZANIA CERTYFIKATU (Insecure)
     espClient.setInsecure();
     mqtt.setServer(mqtt_server.c_str(), 8883);
     mqtt.setCallback(mqttCallback);
