@@ -1,5 +1,5 @@
 // ================================================================
-// SERWER DYSPOZYTORSKI (MULTI-HUB) - V2.0
+// SERWER DYSPOZYTORSKI (MULTI-HUB) - V2.1 PEŁNY KLON
 // ================================================================
 #include <Arduino.h>
 #include <WiFi.h>              
@@ -70,7 +70,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>HUB Dowodzenia - Flota</title>
   <style>
-    :root { --bg: #121212; --card: #1e1e1e; --text: #fff; --accent: #00bcd4; --green: #4caf50; --red: #f44336; --orange: #ff9800; --purple: #9c27b0; --yellow: #ffeb3b; }
+    :root { --bg: #121212; --card: #1e1e1e; --text: #fff; --accent: #00bcd4; --green: #4caf50; --red: #f44336; --orange: #ff9800; --purple: #9c27b0; --yellow: #ffeb3b; --pink: #e91e63; }
     body { background-color: var(--bg); color: var(--text); font-family: 'Segoe UI', sans-serif; margin: 0; padding: 0; }
     .header { background: #000; padding: 15px; text-align: center; border-bottom: 2px solid var(--accent); position: relative;}
     h1 { margin: 0; font-size: 22px; color: var(--accent); }
@@ -88,7 +88,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     .row:last-child { border: none; }
     .val { font-weight: bold; color: var(--green); }
     
-    .ctrl-btn { width: 48%; padding: 15px; font-size: 16px; font-weight: bold; border-radius: 8px; border: none; cursor: pointer; color: #fff; text-align:center;}
+    .ctrl-btn { width: 48%; padding: 15px; font-size: 16px; font-weight: bold; border-radius: 8px; border: none; cursor: pointer; color: #fff; text-align:center; transition: 0.2s;}
     .btn-on { background: var(--green); }
     .btn-off { background: var(--red); }
     .btn-auto { background: var(--accent); color: #000; }
@@ -104,34 +104,37 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     .m-stat { font-size: 14px; color: #888; display:flex; justify-content: space-between;}
     .dot { height: 12px; width: 12px; background-color: var(--red); border-radius: 50%; display: inline-block;}
     .dot.ok { background-color: var(--green); box-shadow: 0 0 8px var(--green);}
+    .badge-ok { color: var(--green); font-weight: bold; text-shadow: 0 0 5px rgba(76, 175, 80, 0.5); }
+    .badge-err { color: var(--red); font-weight: bold; text-shadow: 0 0 5px rgba(244, 67, 54, 0.5); }
     
     #btn-back { position: absolute; left: 15px; top: 15px; background: none; border: 1px solid var(--accent); color: var(--accent); padding: 5px 15px; border-radius: 5px; cursor: pointer; display: none;}
   </style>
 </head>
 <body>
   <div class="header">
-    <button id="btn-back" onclick="showDashboard()">🔙 Wróć</button>
+    <button id="btn-back" onclick="showDashboard()">🔙 Wróć do Floty</button>
     <h1>📡 HUB DOWODZENIA</h1>
-    <div style="margin-top:5px; font-size:12px; color:#888;">IP Serwera: <span id="srvIP">--</span> | <span id="mqStat">Szukam chmury...</span></div>
+    <div style="margin-top:5px; font-size:12px; color:#888;">IP Serwera HUB: <span id="srvIP">--</span> | <span id="mqStat">Szukam chmury...</span></div>
   </div>
 
   <div id="view-dashboard" class="container" style="display:block;">
-    <h3 style="color:#aaa;">Dostępne Maszyny:</h3>
-    <div id="machine-list">Ładowanie z chmury...</div>
+    <h3 style="color:#aaa; border-bottom:1px solid #333; padding-bottom:10px;">Dostępne Maszyny (Live):</h3>
+    <div id="machine-list">Ładowanie sygnału z chmury...</div>
     
     <div class="card" style="margin-top: 40px; border: 1px solid #555;">
-      <h3 style="margin-top:0; color:var(--yellow);">⚙️ Konfiguracja Serwera HUB</h3>
+      <h3 style="margin-top:0; color:var(--yellow);">⚙️ Konfiguracja samego Serwera HUB</h3>
+      <p style="font-size:12px; color:#aaa;">Ustawienia łącza internetowego dla tego ekranu na biurku.</p>
       <form onsubmit="saveConfig(event)">
         <label>WiFi SSID (Router domowy/biurowy)</label>
         <input type="text" id="c_ssid">
         <label>WiFi Hasło</label>
-        <input type="password" id="c_pass">
+        <input type="password" id="c_pass" placeholder="[Zapisane - pozostaw puste aby nie zmieniac]">
         <label>MQTT Adres Brokera (Cluster URL)</label>
         <input type="text" id="c_msrv">
         <label>MQTT Użytkownik</label>
         <input type="text" id="c_musr">
         <label>MQTT Hasło</label>
-        <input type="password" id="c_mpas">
+        <input type="password" id="c_mpas" placeholder="[Zapisane - pozostaw puste aby nie zmieniac]">
         <button type="submit" class="submit-btn" style="background:var(--yellow); color:#000;">ZAPISZ I RESTARTUJ HUB</button>
       </form>
     </div>
@@ -147,12 +150,12 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     </div>
 
     <div class="container">
-      <h2 style="text-align:center; color:var(--text); margin-top:0;">Sterujesz: <span id="active-m-id" style="color:var(--accent);">---</span></h2>
+      <h2 style="text-align:center; color:var(--text); margin-top:0; border-bottom:1px dashed #444; padding-bottom:10px;">Maszyna: <span id="active-m-id" style="color:var(--accent);">---</span></h2>
       
       <div id="Panel" class="tab-content active">
         <div class="card" style="display: flex; justify-content: space-between;">
-          <div id="btnSys" class="ctrl-btn btn-off" onclick="sendCmd('SYSTEM=TOGGLE')">Zasilanie: OFF</div>
-          <div id="btnMode" class="ctrl-btn btn-auto" onclick="sendCmd('MODE=TOGGLE')">Tryb: AUTO</div>
+          <div id="btnSys" class="ctrl-btn btn-off" onclick="toggleSys()">Zasilanie: OFF</div>
+          <div id="btnMode" class="ctrl-btn btn-man" onclick="toggleMode()">Tryb: MAN</div>
         </div>
         <div class="card">
           <div class="row"><span>Prąd Maszyny:</span> <span class="val" id="amp">-- A</span></div>
@@ -161,7 +164,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
           <div class="row"><span>Wyjście na Falownik 1:</span> <span class="val" id="dac" style="color:var(--orange);">-- V</span></div>
           <div class="row"><span>Wyjście na Falownik 2:</span> <span class="val" id="dac2v" style="color:var(--purple);">-- V</span></div>
         </div>
-        <button class="submit-btn" style="background:var(--red); color:#fff;" onclick="if(confirm('Zrestartować maszynę?')) sendCmd('RESTART=1')">🔄 ZDALNY RESTART MASZYNY</button>
+        <button class="submit-btn" style="background:var(--red); color:#fff;" onclick="if(confirm('Zrestartować maszynę? Zostanie zatrzymana!')) sendCmd('RESTART=1')">🔄 ZDALNY RESTART MASZYNY (ESP32)</button>
       </div>
 
       <div id="Sensory" class="tab-content">
@@ -181,7 +184,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       </div>
 
       <div id="Nastawy" class="tab-content">
-        <p style="color:var(--orange); font-size:12px; text-align:center;">Uwaga: Wprowadzane tu zmiany zostaną wysłane chmurą MQTT do wybranej maszyny.</p>
+        <p style="color:var(--orange); font-size:12px; text-align:center;">Wprowadzane tu zmiany zostaną bezzwłocznie przesłane przez chmurę MQTT do maszyny.</p>
         
         <div class="card">
           <h3 style="margin-top:0;">1. Widełki Pracy (Ampery)</h3>
@@ -204,28 +207,102 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         <div class="card">
           <h3 style="margin-top:0;">3. Strojenie Algorytmu PID</h3>
           <form onsubmit="cmdPID(event)">
-            <label>P</label><input type="number" step="0.01" id="kp" required>
-            <label>I</label><input type="number" step="0.01" id="ki" required>
-            <label>D</label><input type="number" step="0.01" id="kd" required>
+            <label>P - Reakcja natychmiastowa</label><input type="number" step="0.01" id="kp" required>
+            <label>I - Wyrównywanie w czasie</label><input type="number" step="0.01" id="ki" required>
+            <label>D - Przewidywanie</label><input type="number" step="0.01" id="kd" required>
             <button type="submit" class="submit-btn" style="background:#555; color:#fff;">WYŚLIJ PID DO MASZYNY</button>
           </form>
+        </div>
+
+        <div class="card">
+          <h3 style="margin-top:0; color:var(--green);">4. Ustawienia Bezpieczeństwa (Odcięcia)</h3>
+          <form onsubmit="cmdAlarms(event)">
+            <label>Próg Odcięcia Awaryjnego (+ Ampery ponad Max Limit)</label><input type="number" step="0.1" id="ovL" required>
+            <label>Próg Wznowienia Pracy (+ Ampery powyżej Min Limit)</label><input type="number" step="0.1" id="recL" required>
+            <button type="submit" class="submit-btn" style="background:var(--green); color:#fff;">WYŚLIJ ALARMY DO MASZYNY</button>
+          </form>
+        </div>
+
+        <div class="card">
+          <h3 style="margin-top:0; color:var(--pink);">5. Ochrona Falownika (Limity Napięcia DAC)</h3>
+          <form onsubmit="cmdVoltLimits(event)">
+            <label>Dolna podłoga napięcia [V]</label><input type="number" step="0.01" id="minV" required>
+            <label>Górny sufit napięcia [V]</label><input type="number" step="0.01" id="maxV" required>
+            <button type="submit" class="submit-btn" style="background:var(--pink); color:#fff;">WYŚLIJ LIMITY NAPIĘCIA</button>
+          </form>
+        </div>
+
+        <div class="card">
+          <h3 style="margin-top:0; color:var(--purple);">6. Konfiguracja Sygnału (Informacyjna)</h3>
+          <form onsubmit="cmdOutMode(event)">
+            <label>Wybierz typ falowników na obiekcie:</label>
+            <select id="outMode">
+              <option value="0">Standard Napięciowy 0-10V</option>
+              <option value="1">Izolator Optyczny GLK (0 - 20mA)</option>
+              <option value="2">Izolator Optyczny GLK (4 - 20mA)</option>
+            </select>
+            <button type="submit" class="submit-btn" style="background:var(--purple); color:#fff;">WYŚLIJ PROFIL FALOWNIKA</button>
+          </form>
+        </div>
+
+        <div class="card">
+          <h3 style="margin-top:0; color:#00bcd4;">7. Kalibracja Napięcia DAC (Offset)</h3>
+          <form onsubmit="cmdCalib(event)">
+            <label>Korekta DAC 1 [Volty]</label><input type="number" step="0.01" id="dac1c" required>
+            <label>Korekta DAC 2 [Volty]</label><input type="number" step="0.01" id="dac2c" required>
+            <button type="submit" class="submit-btn" style="background:#00bcd4; color:#000;">WYŚLIJ KALIBRACJĘ</button>
+          </form>
+        </div>
+
+        <div class="card">
+          <h3 style="margin-top:0; color:#4caf50;">8. Zdalna Zmiana WiFi Maszyny</h3>
+          <form onsubmit="cmdWiFi(event)">
+            <label>Nowa nazwa sieci WiFi (SSID)</label><input type="text" id="m_wifiSSID">
+            <label>Nowe hasło do WiFi</label><input type="password" id="m_wifiPASS" placeholder="[Pozostaw puste aby nie zmieniac]">
+            <button type="submit" class="submit-btn" style="background:#4caf50; color:#fff;">ZAPISZ I RESTARTUJ MASZYNĘ</button>
+          </form>
+        </div>
+
+        <div class="card" style="border: 2px solid #03a9f4;">
+          <h3 style="margin-top:0; color:#03a9f4;">9. Zdalna Zmiana Chmury Maszyny</h3>
+          <form onsubmit="cmdMQTT(event)">
+            <label>Adres Brokera (Cluster URL)</label><input type="text" id="m_mqSrv">
+            <label>Użytkownik MQTT</label><input type="text" id="m_mqUsr">
+            <label>Hasło MQTT</label><input type="password" id="m_mqPas" placeholder="[Pozostaw puste aby nie zmieniac]">
+            <label>Unikalne ID Maszyny</label><input type="text" id="m_mqId">
+            <button type="submit" class="submit-btn" style="background:#03a9f4; color:#fff;">ZAPISZ MQTT MASZYNY</button>
+          </form>
+        </div>
+
+        <div class="card" style="border: 2px solid var(--yellow);">
+          <h3 style="margin-top:0; color:var(--yellow);">10. Ustawienia Domyślne Maszyny</h3>
+          <button onclick="if(confirm('Zapisać na wybranej maszynie jako domyślne?')) sendCmd('CMD:SAVEDEF')" class="submit-btn" style="background:var(--yellow); color:#000;">ZAPISZ OBECNE JAKO DOMYŚLNE</button>
+          <button onclick="if(confirm('Przywrócić fabryczne na maszynie?')) sendCmd('CMD:RESTOREDEF')" class="submit-btn" style="background:var(--red); color:#fff; margin-top:10px;">PRZYWRÓĆ USTAWIENIA DOMYŚLNE</button>
         </div>
       </div>
 
       <div id="SD" class="tab-content">
         <div class="card">
+          <h3 style="margin-top:0; color:var(--yellow);">🧠 Parametry Systemu ESP32 Maszyny</h3>
+          <div class="row"><span>Czas pracy (Uptime):</span> <span class="val" id="esp_up" style="color:var(--text);">--</span></div>
+          <div class="row"><span>Wolna Pamięć RAM:</span> <span class="val" id="esp_ram" style="color:var(--text);">-- %</span></div>
+          <div class="row"><span>Zajętość Pamięci (Flash):</span> <span class="val" id="esp_flash" style="color:var(--text);">-- KB</span></div>
+          <div class="row"><span>Adres IP (LAN / Router):</span> <span class="val" id="esp_rip" style="color:var(--text);">--</span></div>
+        </div>
+        <div class="card">
           <h3 style="margin-top:0; color:#00bcd4;">🩺 Status Sprzętu (Na Żywo)</h3>
           <div class="row"><span>Zasilanie (PZEM-004T):</span> <span id="st_pzem" class="badge-err">CZEKAM NA DANE...</span></div>
           <div class="row"><span>Ekran HMI (Nextion):</span> <span id="st_nex" class="badge-err">CZEKAM NA DANE...</span></div>
           <div class="row"><span>Klimat (DHT11):</span> <span id="st_dht" class="badge-err">CZEKAM NA DANE...</span></div>
+          <div class="row"><span>Logi (Karta SD):</span> <span id="st_sd" class="badge-err">CZEKAM NA DANE...</span></div>
         </div>
-        <p style="font-size:12px; color:#aaa; text-align:center;">Pełna diagnostyka będzie dostępna po aktualizacji firmware'u na wybranej maszynie (Faza 4).</p>
+        <p style="font-size:12px; color:#aaa; text-align:center;">Pełna diagnostyka będzie napełniana danymi po zaktualizowaniu Firmware'u na wybranej maszynie do V16.</p>
       </div>
 
       <div id="OTA" class="tab-content">
         <div class="card" style="border: 2px solid #9c27b0;">
           <h3 style="margin-top:0; color:#9c27b0;">🚀 Zdalna Aktualizacja Firmware (Chmura)</h3>
-          <p style="font-size:13px; color:#aaa;">Wklej surowy link URL do pliku .bin (np. z GitHub), aby zdalnie wgrać nowy system do wskazanej maszyny.</p>
+          <p style="font-size:13px; color:#aaa;">Wklej surowy link URL do pliku .bin (np. z GitHub), aby zdalnie wgrać nowy kod do maszyny.</p>
           <input type="text" id="otaUrl" placeholder="https://raw.githubusercontent.com/.../update.bin">
           <button class="submit-btn" style="background:#9c27b0; color:#fff;" onclick="cmdOTA()">ROZPOCZNIJ ZDALNE FLASHOWANIE</button>
         </div>
@@ -237,9 +314,13 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   <script>
     let activeMachine = "";
     let lastFocusTime = 0;
+    
+    // Zmienne śledzące stan maszyny dla poprawnych przycisków TOGGLE
+    let currentSysON = 0;
+    let currentAutoM = 1;
 
     window.addEventListener('DOMContentLoaded', () => {
-        document.querySelectorAll('input').forEach(i => {
+        document.querySelectorAll('input, select').forEach(i => {
             i.addEventListener('focus', () => { lastFocusTime = Date.now(); });
             i.addEventListener('input', () => { lastFocusTime = Date.now(); });
             i.addEventListener('blur', () => { lastFocusTime = Date.now(); });
@@ -267,7 +348,6 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       document.getElementById("view-machine").style.display = "block";
       document.getElementById("btn-back").style.display = "inline-block";
       
-      // Reset zakładek
       document.querySelectorAll(".tab-content").forEach(el => el.style.display = "none");
       document.querySelectorAll(".tablinks").forEach(el => el.classList.remove("active"));
       document.getElementById("Panel").style.display = "block";
@@ -280,12 +360,32 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       fetch('/api/send_cmd?id=' + activeMachine, {
         method: 'POST', headers: {'Content-Type': 'application/x-www-form-urlencoded'},
         body: 'cmd=' + encodeURIComponent(cmdStr)
-      }).then(() => alert("Rozkaz wprowadzony do sieci MQTT!"));
+      }).then(() => alert("Wysłano komendę do maszyny!"));
     }
+
+    // Mądre przełączanie - Serwer wie jaki jest stan i wysyła komendę odwrotną
+    function toggleSys() { sendCmd(currentSysON ? 'SYSTEM=OFF' : 'SYSTEM=ON'); }
+    function toggleMode() { sendCmd(currentAutoM ? 'MODE=MAN' : 'MODE=AUTO'); }
 
     function cmdLimits(e) { e.preventDefault(); sendCmd(`CMD:LIMITS:${document.getElementById('minL').value}:${document.getElementById('maxL').value}`); }
     function cmdRatios(e) { e.preventDefault(); sendCmd(`CMD:RATIOS:${document.getElementById('dac1r').value}:${document.getElementById('dac2r').value}`); }
     function cmdPID(e) { e.preventDefault(); sendCmd(`CMD:PID:${document.getElementById('kp').value}:${document.getElementById('ki').value}:${document.getElementById('kd').value}`); }
+    function cmdAlarms(e) { e.preventDefault(); sendCmd(`CMD:ALARMS:${document.getElementById('ovL').value}:${document.getElementById('recL').value}`); }
+    function cmdVoltLimits(e) { e.preventDefault(); sendCmd(`CMD:VOLT:${document.getElementById('minV').value}:${document.getElementById('maxV').value}`); }
+    function cmdOutMode(e) { e.preventDefault(); sendCmd(`CMD:OUTMODE:${document.getElementById('outMode').value}`); }
+    function cmdCalib(e) { e.preventDefault(); sendCmd(`CMD:CALIB:${document.getElementById('dac1c').value}:${document.getElementById('dac2c').value}`); }
+    
+    function cmdWiFi(e) { 
+        e.preventDefault(); 
+        let pass = document.getElementById('m_wifiPASS').value;
+        sendCmd(`CMD:WIFI:${document.getElementById('m_wifiSSID').value}:${pass}`); 
+    }
+    function cmdMQTT(e) { 
+        e.preventDefault(); 
+        let pass = document.getElementById('m_mqPas').value;
+        sendCmd(`CMD:MQTT:${document.getElementById('m_mqSrv').value}:${document.getElementById('m_mqUsr').value}:${pass}:${document.getElementById('m_mqId').value}`); 
+    }
+
     function cmdOTA() {
       let url = document.getElementById('otaUrl').value;
       if(!url.startsWith("http")) return alert("Błąd! Podaj link HTTP/HTTPS.");
@@ -298,12 +398,11 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       e.preventDefault();
       let p = `ssid=${encodeURIComponent(document.getElementById('c_ssid').value)}&pass=${encodeURIComponent(document.getElementById('c_pass').value)}&msrv=${encodeURIComponent(document.getElementById('c_msrv').value)}&musr=${encodeURIComponent(document.getElementById('c_musr').value)}&mpas=${encodeURIComponent(document.getElementById('c_mpas').value)}`;
       fetch('/api/save_config', { method: 'POST', headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: p })
-      .then(() => { alert("Zapisano! Trwa restart HUBa..."); setTimeout(()=>location.reload(), 5000); });
+      .then(() => { alert("Zapisano konfigurację Serwera! Restart..."); setTimeout(()=>location.reload(), 5000); });
     }
 
     // --- PĘTLA POBIERAJĄCA DANE Z SERWERA (CO 1 SEKUNDĘ) ---
     setInterval(() => {
-      // Pobieranie listy maszyn do Dashboardu
       fetch('/api/machines').then(r => r.json()).then(data => {
         if(activeMachine === "") {
           let html = "";
@@ -313,27 +412,33 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
                        <div class='m-stat'><span>Ostatni sygnał: ${m.age}s temu</span> <span><span class='dot ok'></span> ONLINE</span></div>
                      </div>`;
           });
-          if(data.length === 0) html = "<div style='text-align:center; padding:20px; color:#666;'>Brak połączonych maszyn w chmurze...</div>";
+          if(data.length === 0) html = "<div style='text-align:center; padding:20px; color:#666;'>Brak maszyn online w HiveMQ...</div>";
           document.getElementById('machine-list').innerHTML = html;
         }
       });
 
-      // Jeśli jesteśmy w widoku maszyny, pobierz jej szczegóły
       if(activeMachine !== "") {
         fetch('/api/machine_data?id=' + activeMachine).then(r => r.json()).then(d => {
+          
+          if(d.sysON !== undefined) currentSysON = d.sysON;
+          if(d.autoM !== undefined) currentAutoM = d.autoM;
+
           document.getElementById('amp').innerText = (d.amp!==undefined?d.amp:"--") + " A";
           document.getElementById('setp').innerText = (d.setp!==undefined?d.setp:"--") + " A";
           document.getElementById('volt').innerText = (d.volt!==undefined?d.volt:"--") + " V";
           
           let btnSys = document.getElementById('btnSys');
-          if(d.sysON === 1) { btnSys.className = "ctrl-btn btn-on"; btnSys.innerText = "Zasilanie: ON"; }
+          if(currentSysON === 1) { btnSys.className = "ctrl-btn btn-on"; btnSys.innerText = "Zasilanie: ON"; }
           else { btnSys.className = "ctrl-btn btn-off"; btnSys.innerText = "Zasilanie: OFF"; }
+
+          let btnMode = document.getElementById('btnMode');
+          if(currentAutoM === 1) { btnMode.className = "ctrl-btn btn-auto"; btnMode.innerText = "Tryb: AUTO"; }
+          else { btnMode.className = "ctrl-btn btn-man"; btnMode.innerText = "Tryb: MAN"; }
 
           let trip = document.getElementById('trip');
           if(d.trip === 1) { trip.innerText = "TAK (Odcięta!)"; trip.style.color = "var(--red)"; }
           else { trip.innerText = "NIE"; trip.style.color = "var(--green)"; }
 
-          // --- TE POLA ZACZNĄ SIĘ WYPEŁNIAĆ PO WGRANIU NOWEGO KODU DO MASZYNY (Faza 4) ---
           if(d.dac !== undefined) document.getElementById('dac').innerText = d.dac + " V";
           if(d.dac2v !== undefined) document.getElementById('dac2v').innerText = d.dac2v + " V";
           if(d.pow !== undefined) document.getElementById('pow').innerText = d.pow + " W";
@@ -343,7 +448,24 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
           if(d.temp !== undefined) document.getElementById('temp').innerText = d.temp + " °C";
           if(d.hum !== undefined) document.getElementById('hum').innerText = d.hum + " %";
 
+          // Aktualizacja diagnostyki SD/Sprzetu (Jesli maszyna wysyla te dane)
+          if(d.up !== undefined) document.getElementById('esp_up').innerText = d.up;
+          if(d.heap_pct !== undefined) document.getElementById('esp_ram').innerText = d.heap_pct + " %";
+          if(d.sketch !== undefined) document.getElementById('esp_flash').innerText = d.sketch;
+          if(d.router_ip !== undefined) document.getElementById('esp_rip').innerText = d.router_ip;
+
+          function setSt(id, st) {
+              let el = document.getElementById(id);
+              if (st == 1) { el.innerText = "ONLINE"; el.className = "badge-ok"; } 
+              else { el.innerText = "BŁĄD / OFFLINE"; el.className = "badge-err"; }
+          }
+          if(d.pzem !== undefined) setSt('st_pzem', d.pzem);
+          if(d.nex !== undefined) setSt('st_nex', d.nex);
+          if(d.dht !== undefined) setSt('st_dht', d.dht);
+          if(d.sd !== undefined) setSt('st_sd', d.sd);
+
           if (Date.now() - lastFocusTime > 10000) {
+              if(d.outM !== undefined) document.getElementById('outMode').value = d.outM;
               if(d.minL !== undefined) document.getElementById('minL').value = d.minL;
               if(d.maxL !== undefined) document.getElementById('maxL').value = d.maxL;
               if(d.kp !== undefined) document.getElementById('kp').value = d.kp;
@@ -351,20 +473,20 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
               if(d.kd !== undefined) document.getElementById('kd').value = d.kd;
               if(d.dac1R !== undefined) document.getElementById('dac1r').value = d.dac1R;
               if(d.dac2R !== undefined) document.getElementById('dac2r').value = d.dac2R;
+              if(d.ovL !== undefined) document.getElementById('ovL').value = d.ovL;
+              if(d.recL !== undefined) document.getElementById('recL').value = d.recL;
+              if(d.dac1C !== undefined) document.getElementById('dac1c').value = d.dac1C;
+              if(d.dac2C !== undefined) document.getElementById('dac2c').value = d.dac2C;
+              if(d.minV !== undefined) document.getElementById('minV').value = d.minV;
+              if(d.maxV !== undefined) document.getElementById('maxV').value = d.maxV;
+              if(d.wifi_s !== undefined) document.getElementById('m_wifiSSID').value = d.wifi_s;
+              if(d.mq_srv !== undefined) document.getElementById('m_mqSrv').value = d.mq_srv;
+              if(d.mq_usr !== undefined) document.getElementById('m_mqUsr').value = d.mq_usr;
+              if(d.mq_id !== undefined) document.getElementById('m_mqId').value = d.mq_id;
           }
-          
-          if(d.pzem !== undefined) {
-             document.getElementById('st_pzem').innerText = d.pzem==1?"ONLINE":"BŁĄD";
-             document.getElementById('st_pzem').className = d.pzem==1?"badge-ok":"badge-err";
-          }
-          if(d.nex !== undefined) {
-             document.getElementById('st_nex').innerText = d.nex==1?"ONLINE":"BŁĄD";
-             document.getElementById('st_nex').className = d.nex==1?"badge-ok":"badge-err";
-          }
-        }).catch(e => console.log("Brak JSON"));
+        }).catch(e => console.log("Czekam na JSON"));
       }
 
-      // Odświeżanie paska statusu serwera
       fetch('/api/server_status').then(r => r.json()).then(data => {
         document.getElementById('srvIP').innerText = data.ip;
         if(data.ip === "0.0.0.0" || data.ip === "192.168.10.1") {
@@ -404,7 +526,6 @@ void handleGetMachines() {
     unsigned long now = millis();
     for(int i=0; i<MAX_MACHINES; i++) {
         if(machines[i].id != "") {
-            // Uznajemy maszyne za martwa, jesli nie nadala sygnalu przez ostatnie 30 sekund
             if((now - machines[i].lastSeen) < 30000) {
                 if(!first) json += ",";
                 json += "{\"id\":\"" + machines[i].id + "\", \"age\":" + String((now - machines[i].lastSeen)/1000) + "}";
@@ -483,7 +604,6 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     String msg = "";
     for (int i = 0; i < length; i++) msg += (char)payload[i];
     
-    // Parser tematu: biuro/Granulator_01/dane
     String t = String(topic);
     int firstSlash = t.indexOf('/');
     int secondSlash = t.indexOf('/', firstSlash + 1);
@@ -534,8 +654,6 @@ void handleMQTT() {
             
             if (mqtt.connect(clientId.c_str(), mqtt_user.c_str(), mqtt_pass.c_str())) {
                 Serial.println(" SUKCES!");
-                
-                // + (PLUS) to Wildcard MQTT - lapie kazda maszyne w srodkowym wezle!
                 mqtt.subscribe("biuro/+/dane");
                 Serial.println("[MQTT] Nasluchuje paczek od wszystkich maszyn na: biuro/+/dane");
             } else {
@@ -555,9 +673,9 @@ void setup() {
     pinMode(PIN_LED, OUTPUT);
     Serial.begin(115200);
     delay(1000);
-    Serial.println("\n\n--- URUCHAMIAM MULTI-HUB FLOTY (V2.0) ---");
+    Serial.println("\n\n--- URUCHAMIAM MULTI-HUB FLOTY (V2.1 PEŁNY KLON) ---");
 
-    for(int i=0; i<MAX_MACHINES; i++) machines[i].id = ""; // Czyszczenie listy na start
+    for(int i=0; i<MAX_MACHINES; i++) machines[i].id = ""; 
 
     memory.begin("server_conf", false);
     routerSSID = memory.getString("ssid", "");
@@ -567,7 +685,7 @@ void setup() {
     mqtt_pass = memory.getString("mpas", "");
 
     mqtt_server = cleanHostAddress(mqtt_server);
-    mqtt.setBufferSize(2048); // Zwiekszamy bufor, bo "Gruby JSON" od maszyny bedzie wiekszy!
+    mqtt.setBufferSize(4096); 
 
     WiFi.disconnect(true);
     WiFi.softAPdisconnect(true);
