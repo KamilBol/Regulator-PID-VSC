@@ -1,5 +1,5 @@
 // ================================================================
-// REGULATOR PID - V16.1 (THICK JSON, PEŁNY HTML, CLOUD COMMANDS)
+// REGULATOR PID - V16.2 (THICK JSON, PEŁNY HTML, CLOUD COMMANDS)
 // ================================================================
 #include <Arduino.h>
 #include <Wire.h>
@@ -102,9 +102,19 @@ unsigned long lastNextionResponseTime = 0;
 float pzem_u = 0, pzem_p = 0, pzem_pf = 0, pzem_s = 0, pzem_q = 0;
 float dht_t = 0, dht_h = 0;
 
-// Deklaracje
-void startRegulator(); void stopRegulator(); void updateSettingsScreen(); bool isResetStage1Active(); 
-void handleRestoreDefaults(); void toggleLocalWiFi(); void performRemoteOTA(String url);
+// ================================================================
+// DEKLARACJE WYPRZEDZAJĄCE (Zabezpieczenie przed błędami kompilatora)
+// ================================================================
+void startRegulator(); 
+void stopRegulator(); 
+void updateSettingsScreen(); 
+bool isResetStage1Active(); 
+void handleRestoreDefaults(); 
+void toggleLocalWiFi(); 
+void performRemoteOTA(String url);
+void publishSDList();
+void handleNextionInput();
+void processButtonAction(int id);
 
 // ================================================================
 // FUNKCJE POMOCNICZE
@@ -130,7 +140,7 @@ void initSD() {
     SPI.begin(PIN_SD_SCK, PIN_SD_MISO, PIN_SD_MOSI, PIN_SD_CS); 
     if(SD.begin(PIN_SD_CS)) { 
         statusSD = true; File f = SD.open("/AI_LOG.txt", FILE_APPEND); 
-        if(f) { f.println("=== START SYSTEMU - V16.1 ==="); f.close(); }
+        if(f) { f.println("=== START SYSTEMU - V16.2 ==="); f.close(); }
         Serial.println("[SD] Karta aktywna.");
     } else { 
         statusSD = false; Serial.println("[SD] BLAD KARTY!"); myNex.writeStr("sd.txt", "ERR"); 
@@ -279,7 +289,7 @@ void handleMQTT() {
     } else {
         mqtt.loop();
         
-        // PUBLIKACJA GRUBEJ PACZKI JSON CO 3 SEKUNDY (STREAMING)
+        // PUBLIKACJA GRUBEJ PACZKI JSON CO 3 SEKUNDY
         if (millis() - lastMqttPublish > 3000) {
             lastMqttPublish = millis();
             
@@ -336,7 +346,7 @@ bool checkAuth() {
 }
 
 // ================================================================
-// STRONA WWW MASZYNY (PEŁNY, LOKALNY HTML)
+// STRONA WWW MASZYNY (PEŁNY, LOKALNY HTML Z V15.0)
 // ================================================================
 const char INDEX_HTML[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
@@ -376,7 +386,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   </style>
 </head>
 <body>
-  <div class="header"><h1>⚙️ Granulator Pro V16.1 (Lokalnie)</h1></div>
+  <div class="header"><h1>⚙️ Granulator Pro V16.2 (Lokalnie)</h1></div>
   
   <div class="nav">
     <button class="tablinks active" onclick="openTab(event, 'Panel')">📊 Panel</button>
@@ -815,12 +825,14 @@ void handleToggleSys() {
     if(systemON) stopRegulator(); else startRegulator();
     server.send(200, "text/plain", "OK");
 }
+
 void handleToggleMode() {
     if(!checkAuth()) return;
     modeAUTO = !modeAUTO;
     myNex.writeStr("pracaautoman.txt", modeAUTO ? "AUT" : "MAN");
     server.send(200, "text/plain", "OK");
 }
+
 void handleSetOutMode() {
     if(!checkAuth()) return;
     if (server.hasArg("m")) {
@@ -830,6 +842,7 @@ void handleSetOutMode() {
     }
     server.send(200, "text/plain", "OK");
 }
+
 void handleSetRatios() {
     if(!checkAuth()) return;
     if (server.hasArg("r1") && server.hasArg("r2")) {
@@ -843,6 +856,7 @@ void handleSetRatios() {
     }
     server.send(200, "text/plain", "OK");
 }
+
 void handleSetAlarms() {
     if(!checkAuth()) return;
     if (server.hasArg("ov") && server.hasArg("rec")) {
@@ -854,6 +868,7 @@ void handleSetAlarms() {
     }
     server.send(200, "text/plain", "OK");
 }
+
 void handleSetLimits() {
     if(!checkAuth()) return;
     if (server.hasArg("min") && server.hasArg("max")) {
@@ -866,6 +881,7 @@ void handleSetLimits() {
     }
     server.send(200, "text/plain", "OK");
 }
+
 void handleSetPID() {
     if(!checkAuth()) return;
     if (server.hasArg("kp") && server.hasArg("ki") && server.hasArg("kd")) {
@@ -880,6 +896,7 @@ void handleSetPID() {
     }
     server.send(200, "text/plain", "OK");
 }
+
 void handleSetCalib() {
     if(!checkAuth()) return;
     if (server.hasArg("c1") && server.hasArg("c2")) {
@@ -887,11 +904,11 @@ void handleSetCalib() {
         dac2Calib = server.arg("c2").toFloat();
         memory.putFloat("dac1Calib", dac1Calib);
         memory.putFloat("dac2Calib", dac2Calib);
-        Serial.printf("[SYS] Kalibracja DAC zapisana: DAC1 = %+.2fV, DAC2 = %+.2fV\n", dac1Calib, dac2Calib);
         triggerBlink(1, 1000);
     }
     server.send(200, "text/plain", "OK");
 }
+
 void handleSetVoltLimits() {
     if(!checkAuth()) return;
     if (server.hasArg("min") && server.hasArg("max")) {
@@ -969,7 +986,6 @@ void handleSaveDefaults() {
     memory.putFloat("d_minV", minDacVolt);
     memory.putFloat("d_maxV", maxDacVolt);
     memory.putInt("d_outM", outMode);
-    Serial.println("[SYS] Zapisano ustawienia domyslne do pamieci.");
     server.send(200, "text/plain", "OK");
 }
 
@@ -1018,14 +1034,21 @@ void handleRestoreDefaults() {
 
 void handleSDList() {
     if(!checkAuth()) return;
-    if(SD.cardType() == CARD_NONE) { server.send(200, "application/json", "[]"); return; }
+    if(SD.cardType() == CARD_NONE) { 
+        server.send(200, "application/json", "[]"); 
+        return; 
+    }
     File root = SD.open("/");
     String json = "[";
     File file = root.openNextFile();
+    bool first = true;
     while(file){
         if (!file.isDirectory()) {
-            if(json != "[") json += ",";
+            if(!first) {
+                json += ",";
+            }
             json += "{\"name\":\"" + String(file.name()) + "\",\"size\":" + String(file.size() / 1024) + "}";
+            first = false;
         }
         file = root.openNextFile();
     }
@@ -1035,10 +1058,16 @@ void handleSDList() {
 
 void handleSDRead() {
     if(!checkAuth()) return;
-    if (!server.hasArg("f")) { server.send(400, "text/plain", "Brak pliku"); return; }
+    if (!server.hasArg("f")) { 
+        server.send(400, "text/plain", "Brak pliku"); 
+        return; 
+    }
     String path = "/" + server.arg("f");
     File file = SD.open(path, FILE_READ);
-    if (!file) { server.send(404, "text/plain", "Nie znaleziono"); return; }
+    if (!file) { 
+        server.send(404, "text/plain", "Nie znaleziono"); 
+        return; 
+    }
     server.streamFile(file, "text/plain"); 
     file.close();
 }
@@ -1103,11 +1132,17 @@ void setupWiFi() {
         if(!checkAuth()) return;
         HTTPUpload& upload = server.upload();
         if (upload.status == UPLOAD_FILE_START) {
-            if (!Update.begin(UPDATE_SIZE_UNKNOWN)) { Update.printError(Serial); }
+            if (!Update.begin(UPDATE_SIZE_UNKNOWN)) { 
+                Update.printError(Serial); 
+            }
         } else if (upload.status == UPLOAD_FILE_WRITE) {
-            if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) { Update.printError(Serial); }
+            if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) { 
+                Update.printError(Serial); 
+            }
         } else if (upload.status == UPLOAD_FILE_END) {
-            if (!Update.end(true)) { Update.printError(Serial); }
+            if (!Update.end(true)) { 
+                Update.printError(Serial); 
+            }
         }
     });
 
@@ -1273,7 +1308,7 @@ void setup() {
 
     delay(2000); 
     Serial.begin(115200); 
-    Serial.println("\n\n--- SYSTEM V16.1 (CLOUD CORE STABLE) ---");
+    Serial.println("\n\n--- SYSTEM V16.2 (CLOUD CORE STABLE) ---");
 
     memory.begin("regulator", false); 
     routerSSID = memory.getString("ssid", "");
@@ -1325,7 +1360,7 @@ void setup() {
     mqtt.setCallback(mqttCallback);
 
     // ================================================================
-    // FIX: POSZERZENIE BUFORA MQTT DLA "GRUBEJ PACZKI JSON" (V16.1)
+    // FIX: POSZERZENIE BUFORA MQTT DLA "GRUBEJ PACZKI JSON" (V16.2)
     // ================================================================
     mqtt.setBufferSize(4096);
 
