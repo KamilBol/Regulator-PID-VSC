@@ -1,5 +1,5 @@
 // ================================================================
-// SERWER DYSPOZYTORSKI (CENTRUM DOWODZENIA) - V1.2 PRO
+// SERWER DYSPOZYTORSKI (CENTRUM DOWODZENIA) - V1.3 FAST
 // ================================================================
 #include <Arduino.h>
 #include <WiFi.h>              
@@ -32,6 +32,21 @@ unsigned long lastMqttReconnect = 0;
 bool isWifiAPActive = false;
 
 // ================================================================
+// FUNKCJE POMOCNICZE
+// ================================================================
+String cleanHostAddress(String host) {
+    String clean = host;
+    clean.replace("http://", "");
+    clean.replace("https://", "");
+    int colonIndex = clean.indexOf(':');
+    if (colonIndex > 0) {
+        clean = clean.substring(0, colonIndex); // Ucina wszystko od dwukropka w prawo
+    }
+    clean.trim();
+    return clean;
+}
+
+// ================================================================
 // BRAMKA AUTORYZACJI
 // ================================================================
 bool checkAuth() {
@@ -58,7 +73,6 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     .header { background: #000; padding: 15px; text-align: center; border-bottom: 2px solid var(--accent); }
     h1 { margin: 0; font-size: 22px; color: var(--accent); }
     
-    /* ZAKŁADKI (TABS) - Wygląd identyczny jak w Maszynie */
     .nav { display: flex; justify-content: space-around; background: #222; padding: 10px 0; overflow-x: auto;}
     .nav button { background: none; border: none; color: #aaa; font-size: 14px; font-weight: bold; cursor: pointer; padding: 10px; white-space: nowrap; }
     .nav button.active { color: var(--accent); border-bottom: 2px solid var(--accent); }
@@ -242,7 +256,6 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         let dot = document.getElementById('mqtt-dot');
         let txt = document.getElementById('mqtt-txt');
         
-        // Zmiana logiki - jeśli IP zaczyna sie od czegos innego niz pusty string, to jestesmy w LAN
         if(data.ip === "0.0.0.0" || data.ip === "192.168.10.1") {
             dot.className = "status-dot";
             txt.innerText = "Brak internetu (Tylko sieć lokalna Serwera)";
@@ -317,7 +330,7 @@ void handleSaveConfig() {
     if(server.hasArg("tid")) target_machine_id = server.arg("tid");
     if(server.hasArg("ssid")) routerSSID = server.arg("ssid");
     if(server.hasArg("pass")) routerPASS = server.arg("pass");
-    if(server.hasArg("msrv")) mqtt_server = server.arg("msrv");
+    if(server.hasArg("msrv")) mqtt_server = cleanHostAddress(server.arg("msrv")); // Czyszczenie adresu!
     if(server.hasArg("musr")) mqtt_user = server.arg("musr");
     if(server.hasArg("mpas")) mqtt_pass = server.arg("mpas");
 
@@ -347,16 +360,20 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 }
 
 void handleMQTT() {
-    // BLOKADA INTERNETOWA: MQTT ma absolutny zakaz dzialania bez adresu IP routera domowego
     if (mqtt_server == "" || routerSSID == "") return;
     if (WiFi.status() != WL_CONNECTED || WiFi.localIP().toString() == "0.0.0.0") return;
 
     if (!mqtt.connected()) {
-        if (millis() - lastMqttReconnect > 5000) {
+        // ZWIĘKSZONY TIMEOUT - Serwer WWW nie będzie blokowany przez uwalone TLS!
+        if (millis() - lastMqttReconnect > 15000) {
             lastMqttReconnect = millis();
-            Serial.print("[MQTT] Serwer ma IP (Dostep do WAN)! Proba polaczenia z chmura: " + mqtt_server + "...");
             
-            // KLUCZOWE - wymuszenie zamkniecia uwalonego socketu - leczy blad 'Bad file number'
+            // Jeszcze raz czyścimy adres z pamięci, na wypadek gdybyś załadował zły z EEPROM
+            String cleanHost = cleanHostAddress(mqtt_server);
+            mqtt.setServer(cleanHost.c_str(), 8883);
+
+            Serial.print("[MQTT] Proba polaczenia z chmura: " + cleanHost + "...");
+            
             espClient.stop(); 
             espClient.setInsecure();
             
@@ -364,7 +381,6 @@ void handleMQTT() {
             
             if (mqtt.connect(clientId.c_str(), mqtt_user.c_str(), mqtt_pass.c_str())) {
                 Serial.println(" SUKCES!");
-                
                 String subTopic = "biuro/" + target_machine_id + "/dane";
                 mqtt.subscribe(subTopic.c_str());
                 Serial.println("[MQTT] Nasluchuje informacji od maszyny na: " + subTopic);
@@ -385,7 +401,7 @@ void setup() {
     pinMode(PIN_LED, OUTPUT);
     Serial.begin(115200);
     delay(1000);
-    Serial.println("\n\n--- URUCHAMIAM SERWER CENTRUM DOWODZENIA (V1.2 PRO) ---");
+    Serial.println("\n\n--- URUCHAMIAM SERWER CENTRUM DOWODZENIA (V1.3 FAST) ---");
 
     memory.begin("server_conf", false);
     target_machine_id = memory.getString("tid", "Granulator_01");
@@ -395,7 +411,9 @@ void setup() {
     mqtt_user = memory.getString("musr", "");
     mqtt_pass = memory.getString("mpas", "");
 
-    // Zwiekszenie bufora pod szyfrowanie TLS (HiveMQ tego wymaga w Core 3.x)
+    // Zabezpieczenie przed starym, brudnym adresem w pamieci EEPROM
+    mqtt_server = cleanHostAddress(mqtt_server);
+
     mqtt.setBufferSize(1024);
 
     WiFi.disconnect(true);
@@ -436,9 +454,9 @@ void setup() {
 }
 
 void loop() {
+    // Serwer WWW obsługiwany jako absolutny priorytet
     server.handleClient();
     handleMQTT();
     
-    // Miganie diody na plytce jako sygnal pracy (Heartbeat)
     if(millis() % 1000 < 50) digitalWrite(PIN_LED, HIGH); else digitalWrite(PIN_LED, LOW);
 }
