@@ -29,6 +29,8 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     .btn-off { background: var(--red); }
     .btn-auto { background: var(--accent); color: #000; }
     .btn-man { background: #555; }
+    .btn-eco { background: #0288d1; color: #fff; width: 100%; margin-top: 10px; padding: 10px; font-weight: bold; border: none; border-radius: 8px; cursor: pointer;}
+    .btn-eco-off { background: #555; color: #aaa; width: 100%; margin-top: 10px; padding: 10px; font-weight: bold; border: none; border-radius: 8px; cursor: pointer;}
     label { display: block; margin-top: 10px; font-size: 14px; color: #aaa; }
     input, select { width: 100%; padding: 10px; margin-top: 5px; background: #2a2a2a; border: 1px solid #444; color: #fff; border-radius: 6px; box-sizing: border-box; }
     .submit-btn { width: 100%; padding: 15px; margin-top: 15px; background: var(--accent); color: #000; border: none; font-weight: bold; border-radius: 8px; cursor: pointer; }
@@ -38,9 +40,28 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     #prog-bar { width: 0%; height: 20px; background: var(--green); border-radius: 5px; text-align: center; color: white; line-height: 20px; font-size: 12px;}
     .badge-ok { color: var(--green); font-weight: bold; text-shadow: 0 0 5px rgba(76, 175, 80, 0.5); }
     .badge-err { color: var(--red); font-weight: bold; text-shadow: 0 0 5px rgba(244, 67, 54, 0.5); }
+    
+    /* OVERLAY DLA ZDALNEJ AKTUALIZACJI Z GITHUBA */
+    #remote-ota-overlay {
+        display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+        background: rgba(0,0,0,0.92); z-index: 9999; flex-direction: column; 
+        justify-content: center; align-items: center; text-align: center;
+    }
+    .ota-spinner { font-size: 50px; margin-bottom: 20px; animation: spin 2s linear infinite; }
+    @keyframes spin { 100% { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
+
+  <div id="remote-ota-overlay">
+      <div class="ota-spinner">⚙️</div>
+      <h2 style="color: var(--accent); font-size:24px;" id="rota-state">Inicjalizacja pobierania...</h2>
+      <div style="width: 80%; background: #333; height: 30px; border-radius: 10px; margin-top: 20px; overflow: hidden; box-shadow: 0 0 15px rgba(0, 188, 212, 0.5);">
+          <div id="rota-bar" style="width: 0%; height: 100%; background: var(--green); line-height: 30px; font-weight: bold; transition: width 0.3s;">0%</div>
+      </div>
+      <p style="color:#aaa; font-size:12px; margin-top:20px;">Nie wyłączaj zasilania maszyny!</p>
+  </div>
+
   <div class="header"><h1>⚙️ Granulator Pro V16.4</h1></div>
   
   <div class="nav">
@@ -57,20 +78,20 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       <button id="btnMode" class="ctrl-btn btn-man" onclick="toggleMode()">Tryb: MAN</button>
     </div>
     
-    <div class="card" style="border: 2px solid #0288d1; text-align:center;">
-      <h3 style="margin-top:0; color:#0288d1; font-size:16px;">Telemetria Chmurowa</h3>
-      <button id="btnEco" class="ctrl-btn" style="width: 100%; padding: 15px; font-size: 18px;" onclick="toggleEco()">Tryb MQTT: ŁADOWANIE</button>
-      <p style="font-size:11px; color:#aaa; margin-top:10px;">ECO = Podstawowe parametry, MAX = Pełna analityka systemu.</p>
+    <div class="card" style="border: 1px solid #0288d1;">
+      <h3 style="margin-top:0; color:#0288d1; text-align:center; font-size:16px;">Telemetria Chmurowa</h3>
+      <button id="btnEco" class="btn-eco-off" onclick="toggleEco()">Tryb MQTT: ŁADOWANIE</button>
+      <p style="font-size:11px; color:#aaa; text-align:center; margin-top:10px;">ECO = Podstawowe parametry, MAX = Pełna analityka systemu.</p>
     </div>
 
     <div class="card">
       <div class="row"><span>Prąd Maszyny:</span> <span class="val" id="amp">-- A</span></div>
       <div class="row"><span>Cel PID (Limit):</span> <span class="val" id="setp">-- A</span></div>
       <div class="row"><span>Awaria (Przeciążenie):</span> <span class="val" id="trip" style="color:var(--red);">NIE</span></div>
-      <div class="row"><span>Wyjście na Falownik 1:</span> <span class="val" id="dac" style="color:var(--orange);">-- V</span></div>
-      <div class="row"><span>Wyjście na Falownik 2:</span> <span class="val" id="dac2v" style="color:var(--purple);">-- V</span></div>
+      <div class="row"><span>Wyjście Falownik 1:</span> <span class="val" id="dac" style="color:var(--orange);">-- V</span></div>
+      <div class="row"><span>Wyjście Falownik 2:</span> <span class="val" id="dac2v" style="color:var(--purple);">-- V</span></div>
     </div>
-    <button class="submit-btn" style="background:var(--red); color:#fff; margin-top:20px; font-size:16px;" onclick="restartESP()">🔄 RESTART MASZYNY (ESP32)</button>
+    <button class="submit-btn" style="background:var(--red); color:#fff; font-size:16px;" onclick="restartESP()">🔄 RESTART MASZYNY</button>
   </div>
 
   <div id="Sensory" class="tab-content">
@@ -90,51 +111,49 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
   </div>
 
   <div id="Nastawy" class="tab-content">
-    <div class="card"><h3 style="margin-top:0;">1. Widełki Pracy (Ampery)</h3><form onsubmit="saveLimits(event)"><label>Limit Minimalny</label><input type="number" step="0.1" id="minL" required><label>Limit Maksymalny (Sufit)</label><input type="number" step="0.1" id="maxL" required><button type="submit" class="submit-btn">ZAPISZ WIDEŁKI</button></form></div>
-    <div class="card"><h3 style="margin-top:0; color:var(--orange);">2. Proporcje Falowników</h3><form onsubmit="saveRatios(event)"><label>DAC 1 (Główny)</label><input type="number" step="1" min="0" max="100" id="dac1r" required><label>DAC 2 (Pomocniczy)</label><input type="number" step="1" min="0" max="100" id="dac2r" required><button type="submit" class="submit-btn" style="background:var(--orange); color:#fff;">ZAPISZ PROPORCJE</button></form></div>
-    <div class="card"><h3 style="margin-top:0;">3. Strojenie Algorytmu PID</h3><form onsubmit="savePID(event)"><label>P</label><input type="number" step="0.01" id="kp" required><label>I</label><input type="number" step="0.01" id="ki" required><label>D</label><input type="number" step="0.01" id="kd" required><button type="submit" class="submit-btn" style="background:#555; color:#fff;">ZAPISZ PID</button></form></div>
-    <div class="card"><h3 style="margin-top:0; color:var(--green);">4. Ustawienia Bezpieczeństwa</h3><form onsubmit="saveAlarms(event)"><label>Próg Odcięcia Awaryjnego (+ Ampery ponad Max Limit)</label><input type="number" step="0.1" id="ovL" required><label>Próg Wznowienia Pracy (+ Ampery powyżej Min Limit)</label><input type="number" step="0.1" id="recL" required><button type="submit" class="submit-btn" style="background:var(--green); color:#fff;">ZAPISZ ALARMY</button></form></div>
-    <div class="card"><h3 style="margin-top:0; color:var(--pink);">5. Ochrona Falownika (Limity V)</h3><form onsubmit="saveVoltLimits(event)"><label>Dolna podłoga napięcia [V]</label><input type="number" step="0.01" id="minV" required><label>Górny sufit napięcia [V]</label><input type="number" step="0.01" id="maxV" required><button type="submit" class="submit-btn" style="background:var(--pink); color:#fff;">ZAPISZ LIMITY NAPIĘCIA</button></form></div>
-    <div class="card"><h3 style="margin-top:0; color:var(--purple);">6. Konfiguracja Sygnału</h3><form onsubmit="saveOutMode(event)"><select id="outMode"><option value="0">0-10V</option><option value="1">0-20mA</option><option value="2">4-20mA</option></select><button type="submit" class="submit-btn" style="background:var(--purple); color:#fff;">ZAPISZ PROFIL FALOWNIKA</button></form></div>
-    <div class="card"><h3 style="margin-top:0; color:#00bcd4;">7. Kalibracja Napięcia DAC (Offset)</h3><form onsubmit="saveCalib(event)"><label>Korekta DAC 1 [Volty]</label><input type="number" step="0.01" id="dac1c" required><label>Korekta DAC 2 [Volty]</label><input type="number" step="0.01" id="dac2c" required><button type="submit" class="submit-btn" style="background:#00bcd4; color:#000;">ZAPISZ KALIBRACJĘ</button></form></div>
-    <div class="card"><h3 style="margin-top:0; color:#4caf50;">8. Sieć WiFi Maszyny</h3><form onsubmit="saveWiFi(event)"><label>SSID</label><input type="text" id="wifiSSID"><label>Hasło</label><input type="password" id="wifiPASS" placeholder="[Zapisane]"><button type="submit" class="submit-btn" style="background:#4caf50; color:#fff;">ZAPISZ I POŁĄCZ (Restart)</button></form></div>
-    <div class="card" style="border: 2px solid #03a9f4;"><h3 style="margin-top:0; color:#03a9f4;">9. Chmura MQTT Maszyny</h3><form onsubmit="saveMQTT(event)"><label>Broker (Cluster URL)</label><input type="text" id="mqSrv"><label>Użytkownik MQTT</label><input type="text" id="mqUsr"><label>Hasło MQTT</label><input type="password" id="mqPas" placeholder="[Zapisane]"><label>Unikalne ID Maszyny</label><input type="text" id="mqId"><button type="submit" class="submit-btn" style="background:#03a9f4; color:#fff;">ZAPISZ MQTT (Restart)</button></form></div>
-    <div class="card" style="border: 2px solid var(--yellow);"><h3 style="margin-top:0; color:var(--yellow);">10. Ustawienia Domyślne Systemu</h3><button onclick="saveDefaults()" class="submit-btn" style="background:var(--yellow); color:#000;">ZAPISZ OBECNE JAKO DOMYŚLNE</button><button onclick="restoreDefaults()" class="submit-btn" style="background:var(--red); color:#fff; margin-top:10px;">PRZYWRÓĆ USTAWIENIA DOMYŚLNE</button></div>
+    <div class="card"><h3 style="margin-top:0;">1. Widełki Pracy</h3><form onsubmit="saveLimits(event)"><label>Min</label><input type="number" step="0.1" id="minL" required><label>Max</label><input type="number" step="0.1" id="maxL" required><button type="submit" class="submit-btn">ZAPISZ WIDEŁKI</button></form></div>
+    <div class="card"><h3 style="margin-top:0; color:var(--orange);">2. Proporcje Falowników</h3><form onsubmit="saveRatios(event)"><label>DAC 1</label><input type="number" step="1" min="0" max="100" id="dac1r" required><label>DAC 2</label><input type="number" step="1" min="0" max="100" id="dac2r" required><button type="submit" class="submit-btn" style="background:var(--orange); color:#fff;">ZAPISZ</button></form></div>
+    <div class="card"><h3 style="margin-top:0;">3. PID</h3><form onsubmit="savePID(event)"><label>P</label><input type="number" step="0.01" id="kp" required><label>I</label><input type="number" step="0.01" id="ki" required><label>D</label><input type="number" step="0.01" id="kd" required><button type="submit" class="submit-btn" style="background:#555; color:#fff;">ZAPISZ PID</button></form></div>
+    <div class="card"><h3 style="margin-top:0; color:var(--green);">4. Alarmy</h3><form onsubmit="saveAlarms(event)"><label>Odcięcie</label><input type="number" step="0.1" id="ovL" required><label>Wznowienie</label><input type="number" step="0.1" id="recL" required><button type="submit" class="submit-btn" style="background:var(--green); color:#fff;">ZAPISZ ALARMY</button></form></div>
+    <div class="card"><h3 style="margin-top:0; color:var(--pink);">5. Limity Napięcia</h3><form onsubmit="saveVoltLimits(event)"><label>Min V</label><input type="number" step="0.01" id="minV" required><label>Max V</label><input type="number" step="0.01" id="maxV" required><button type="submit" class="submit-btn" style="background:var(--pink); color:#fff;">ZAPISZ LIMITY</button></form></div>
+    <div class="card"><h3 style="margin-top:0; color:var(--purple);">6. Profil Sygnału</h3><form onsubmit="saveOutMode(event)"><select id="outMode"><option value="0">0-10V</option><option value="1">0-20mA</option><option value="2">4-20mA</option></select><button type="submit" class="submit-btn" style="background:var(--purple); color:#fff;">ZAPISZ PROFIL</button></form></div>
+    <div class="card"><h3 style="margin-top:0; color:#00bcd4;">7. Kalibracja DAC</h3><form onsubmit="saveCalib(event)"><label>Offset 1</label><input type="number" step="0.01" id="dac1c" required><label>Offset 2</label><input type="number" step="0.01" id="dac2c" required><button type="submit" class="submit-btn" style="background:#00bcd4; color:#000;">ZAPISZ KALIBRACJĘ</button></form></div>
+    <div class="card"><h3 style="margin-top:0; color:#4caf50;">8. WiFi Maszyny</h3><form onsubmit="saveWiFi(event)"><label>SSID</label><input type="text" id="wifiSSID"><label>Hasło</label><input type="password" id="wifiPASS" placeholder="[Zapisane]"><button type="submit" class="submit-btn" style="background:#4caf50; color:#fff;">ZAPISZ WIFI</button></form></div>
+    <div class="card"><h3 style="margin-top:0; color:#03a9f4;">9. Chmura MQTT</h3><form onsubmit="saveMQTT(event)"><label>Broker</label><input type="text" id="mqSrv"><label>Użytkownik</label><input type="text" id="mqUsr"><label>Hasło</label><input type="password" id="mqPas" placeholder="[Zapisane]"><label>ID</label><input type="text" id="mqId"><button type="submit" class="submit-btn" style="background:#03a9f4; color:#fff;">ZAPISZ MQTT</button></form></div>
+    <div class="card"><h3 style="margin-top:0; color:var(--yellow);">10. Ustawienia Domyślne</h3><button onclick="saveDefaults()" class="submit-btn" style="background:var(--yellow); color:#000;">ZAPISZ JAKO DOMYŚLNE</button><button onclick="restoreDefaults()" class="submit-btn" style="background:var(--red); color:#fff; margin-top:10px;">PRZYWRÓĆ DOMYŚLNE</button></div>
   </div>
 
   <div id="SD" class="tab-content">
     <div class="card">
-      <h3 style="margin-top:0; color:var(--yellow);">🧠 Parametry Systemu ESP32</h3>
-      <div class="row"><span>Czas pracy (Uptime):</span> <span class="val" id="esp_up" style="color:var(--text);">--</span></div>
-      <div class="row"><span>Wolna Pamięć RAM:</span> <span class="val" id="esp_ram" style="color:var(--text);">-- %</span></div>
-      <div class="row"><span>Procesor (CPU):</span> <span class="val" id="esp_cpu" style="color:var(--text);">--</span></div>
-      <div class="row"><span>Model Układu:</span> <span class="val" id="esp_chip" style="color:var(--text);">--</span></div>
-      <div class="row"><span>Zajętość Pamięci (Flash):</span> <span class="val" id="esp_flash" style="color:var(--text);">-- KB</span></div>
-      <div class="row"><span>Adres IP (LAN / Router):</span> <span class="val" id="esp_rip" style="color:var(--text);">--</span></div>
-      <div class="row"><span>Podłączone Telefony (WiFi):</span> <span class="val" id="esp_cli" style="color:var(--text);">--</span></div>
+      <h3 style="margin-top:0; color:var(--yellow);">🧠 Parametry ESP32</h3>
+      <div class="row"><span>Uptime:</span> <span class="val" id="esp_up" style="color:var(--text);">--</span></div>
+      <div class="row"><span>Wolny RAM:</span> <span class="val" id="esp_ram" style="color:var(--text);">-- %</span></div>
+      <div class="row"><span>CPU:</span> <span class="val" id="esp_cpu" style="color:var(--text);">--</span></div>
+      <div class="row"><span>Chip:</span> <span class="val" id="esp_chip" style="color:var(--text);">--</span></div>
+      <div class="row"><span>Flash:</span> <span class="val" id="esp_flash" style="color:var(--text);">-- KB</span></div>
+      <div class="row"><span>LAN IP:</span> <span class="val" id="esp_rip" style="color:var(--text);">--</span></div>
     </div>
     <div class="card">
-      <h3 style="margin-top:0; color:#00bcd4;">🩺 Status Sprzętu (Na Żywo)</h3>
-      <div class="row"><span>Zasilanie (PZEM-004T):</span> <span id="st_pzem" class="badge-err">ŁADOWANIE</span></div>
-      <div class="row"><span>Ekran HMI (Nextion):</span> <span id="st_nex" class="badge-err">ŁADOWANIE</span></div>
-      <div class="row"><span>Zadajnik (ADS1115):</span> <span id="st_ads" class="badge-err">ŁADOWANIE</span></div>
-      <div class="row"><span>Falowniki (GP8403):</span> <span id="st_dac" class="badge-err">ŁADOWANIE</span></div>
-      <div class="row"><span>Izolator I2C (ISO1540):</span> <span id="st_iso" class="badge-err">ŁADOWANIE</span></div>
-      <div class="row"><span>Klimat (DHT11):</span> <span id="st_dht" class="badge-err">ŁADOWANIE</span></div>
-      <div class="row"><span>Logi (Karta SD):</span> <span id="st_sd" class="badge-err">ŁADOWANIE</span></div>
+      <h3 style="margin-top:0; color:#00bcd4;">🩺 Status Sprzętu</h3>
+      <div class="row"><span>PZEM:</span> <span id="st_pzem" class="badge-err">ŁADOWANIE</span></div>
+      <div class="row"><span>Nextion:</span> <span id="st_nex" class="badge-err">ŁADOWANIE</span></div>
+      <div class="row"><span>ADS1115:</span> <span id="st_ads" class="badge-err">ŁADOWANIE</span></div>
+      <div class="row"><span>GP8403:</span> <span id="st_dac" class="badge-err">ŁADOWANIE</span></div>
+      <div class="row"><span>ISO1540:</span> <span id="st_iso" class="badge-err">ŁADOWANIE</span></div>
+      <div class="row"><span>DHT11:</span> <span id="st_dht" class="badge-err">ŁADOWANIE</span></div>
+      <div class="row"><span>SD:</span> <span id="st_sd" class="badge-err">ŁADOWANIE</span></div>
     </div>
-    <div class="card"><h3 style="margin-top:0;">Pliki na karcie SD</h3><button onclick="loadSD()" style="padding:10px; background:#444; color:#fff; border:none; border-radius:5px; margin-bottom:15px; width:100%;">🔄 Odśwież listę</button><div id="sd-list">Brak danych... kliknij Odśwież.</div></div>
+    <div class="card"><h3 style="margin-top:0;">Karta SD</h3><button onclick="loadSD()" style="padding:10px; background:#444; color:#fff; border:none; width:100%; border-radius:5px;">Odśwież listę</button><div id="sd-list" style="margin-top:10px;">Brak plików</div></div>
   </div>
 
   <div id="OTA" class="tab-content">
     <div class="card">
-      <h3 style="margin-top:0; color:var(--red);">Aktualizacja Systemu (OTA Lokalne)</h3>
+      <h3 style="margin-top:0; color:var(--red);">Aktualizacja Ręczna (Przez WiFi)</h3>
       <form method="POST" action="#" enctype="multipart/form-data" id="upload_form">
         <input type="file" name="update" id="file" accept=".bin" required style="padding: 10px 0;">
-        <button type="submit" class="submit-btn" style="background:var(--red); color:#fff;">🚀 WGRAJ AKTUALIZACJĘ</button>
+        <button type="submit" class="submit-btn" style="background:var(--red); color:#fff;">WGRAJ PLIK</button>
       </form>
-      <div id="prog-container"><div id="prog-bar">0%</div></div>
-      <p id="ota-status" style="margin-top:10px; font-weight:bold;"></p>
+      <div id="prog-container"><div id="prog-bar">0%</div></div><p id="ota-status"></p>
     </div>
   </div>
 
@@ -142,6 +161,24 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     let lastFocusTime = 0;
     window.addEventListener('DOMContentLoaded', () => { document.querySelectorAll('input, select').forEach(i => { i.addEventListener('focus', () => { lastFocusTime = Date.now(); }); i.addEventListener('input', () => { lastFocusTime = Date.now(); }); i.addEventListener('blur', () => { lastFocusTime = Date.now(); }); }); });
     function openTab(evt, tabName) { document.querySelectorAll(".tab-content").forEach(el => el.style.display = "none"); document.querySelectorAll(".tablinks").forEach(el => el.classList.remove("active")); document.getElementById(tabName).style.display = "block"; evt.currentTarget.classList.add("active"); }
+
+    // NOWOŚĆ: SPRAWDZANIE STATUSU ZDALNEJ AKTUALIZACJI Z GITHUBA
+    setInterval(function() {
+      fetch('/api/ota_status').then(res => res.json()).then(data => {
+        let overlay = document.getElementById('remote-ota-overlay');
+        if(data.progress >= 0) {
+            overlay.style.display = "flex";
+            document.getElementById('rota-state').innerText = data.state;
+            document.getElementById('rota-bar').style.width = data.progress + '%';
+            document.getElementById('rota-bar').innerText = data.progress + '%';
+            if (data.progress === 100) {
+                setTimeout(() => location.reload(), 6000);
+            }
+        } else {
+            overlay.style.display = "none";
+        }
+      }).catch(e => {});
+    }, 1000);
 
     setInterval(function() {
       fetch('/api/data').then(res => res.json()).then(data => {
@@ -152,21 +189,16 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         document.getElementById('trip').innerText = data.trip == "1" ? "TAK" : "NIE";
         
         let btnSys = document.getElementById('btnSys');
-        if(data.sysON == "1") { btnSys.style.background = "var(--green)"; btnSys.innerText = "Zasilanie: ON"; } else { btnSys.style.background = "var(--red)"; btnSys.innerText = "Zasilanie: OFF"; }
+        if(data.sysON == "1") { btnSys.className = "ctrl-btn btn-on"; btnSys.innerText = "Zasilanie: ON"; } else { btnSys.className = "ctrl-btn btn-off"; btnSys.innerText = "Zasilanie: OFF"; }
         
         let btnMode = document.getElementById('btnMode');
-        if(data.autoM == "1") { btnMode.style.background = "var(--accent)"; btnMode.style.color = "#000"; btnMode.innerText = "Tryb: AUTO"; } else { btnMode.style.background = "#555"; btnMode.style.color = "#fff"; btnMode.innerText = "Tryb: MAN"; }
+        if(data.autoM == "1") { btnMode.className = "ctrl-btn btn-auto"; btnMode.innerText = "Tryb: AUTO"; } else { btnMode.className = "ctrl-btn btn-man"; btnMode.innerText = "Tryb: MAN"; }
 
-        // OBSŁUGA NOWEGO PRZYCISKU ECO / MAX
         let btnEco = document.getElementById('btnEco');
         if(data.eco == "1") { 
-            btnEco.style.background = "var(--green)"; 
-            btnEco.style.color = "#fff";
-            btnEco.innerText = "Tryb MQTT: ECO"; 
+            btnEco.style.background = "var(--green)"; btnEco.style.color = "#fff"; btnEco.innerText = "Tryb MQTT: ECO"; 
         } else { 
-            btnEco.style.background = "var(--orange)"; 
-            btnEco.style.color = "#fff";
-            btnEco.innerText = "Tryb MQTT: MAX"; 
+            btnEco.style.background = "var(--orange)"; btnEco.style.color = "#fff"; btnEco.innerText = "Tryb MQTT: MAX"; 
         }
 
         document.getElementById('volt').innerText = data.volt + " V";
@@ -191,11 +223,11 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     setInterval(function() {
       fetch('/api/health').then(res => res.json()).then(data => {
         function setSt(id, st, failText) { let el = document.getElementById(id); if (st === "1") { el.innerText = "ONLINE"; el.className = "badge-ok"; } else { el.innerText = failText; el.className = "badge-err"; } }
-        setSt('st_pzem', data.pzem, "BŁĄD / OFFLINE"); setSt('st_nex', data.nex, "BŁĄD / BRAK UART"); setSt('st_ads', data.ads, "BŁĄD / OFFLINE"); setSt('st_dac', data.dac, "BŁĄD / OFFLINE"); setSt('st_dht', data.dht, "BŁĄD / OFFLINE"); setSt('st_sd', data.sd, "BŁĄD / OFFLINE");
-        let el_iso = document.getElementById('st_iso'); if (data.dac === "1" || data.ads === "1") { el_iso.innerText = "ONLINE (Mostek OK)"; el_iso.className = "badge-ok"; } else { el_iso.innerText = "BŁĄD / BRAK I2C"; el_iso.className = "badge-err"; }
+        setSt('st_pzem', data.pzem, "BŁĄD"); setSt('st_nex', data.nex, "BŁĄD"); setSt('st_ads', data.ads, "BŁĄD"); setSt('st_dac', data.dac, "BŁĄD"); setSt('st_dht', data.dht, "BŁĄD"); setSt('st_sd', data.sd, "BŁĄD");
+        let el_iso = document.getElementById('st_iso'); if (data.dac === "1" || data.ads === "1") { el_iso.innerText = "ONLINE"; el_iso.className = "badge-ok"; } else { el_iso.innerText = "BŁĄD"; el_iso.className = "badge-err"; }
         if(document.getElementById('esp_up')) document.getElementById('esp_up').innerText = data.up; if(document.getElementById('esp_ram')) document.getElementById('esp_ram').innerText = data.heap_pct + " %";
         if(document.getElementById('esp_cpu')) document.getElementById('esp_cpu').innerText = data.cpu; if(document.getElementById('esp_chip')) document.getElementById('esp_chip').innerText = data.chip;
-        if(document.getElementById('esp_flash')) document.getElementById('esp_flash').innerText = data.sketch; if(document.getElementById('esp_cli')) document.getElementById('esp_cli').innerText = data.clients; if(document.getElementById('esp_rip')) document.getElementById('esp_rip').innerText = data.router_ip;
+        if(document.getElementById('esp_flash')) document.getElementById('esp_flash').innerText = data.sketch; if(document.getElementById('esp_rip')) document.getElementById('esp_rip').innerText = data.router_ip;
       });
     }, 2000);
 
@@ -203,20 +235,20 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     function toggleMode() { fetch('/api/toggle_mode', {method: 'POST'}); }
     function toggleEco() { fetch('/api/toggle_eco', {method: 'POST'}); }
     function saveOutMode(e) { e.preventDefault(); fetch('/api/set_outmode?m='+document.getElementById('outMode').value, {method: 'POST'}).then(() => alert("Profil zapisany!")); }
-    function saveRatios(e) { e.preventDefault(); fetch('/api/set_ratios?r1='+document.getElementById('dac1r').value+'&r2='+document.getElementById('dac2r').value, {method: 'POST'}).then(() => alert("Zaktualizowane!")); }
-    function saveAlarms(e) { e.preventDefault(); fetch('/api/set_alarms?ov='+document.getElementById('ovL').value+'&rec='+document.getElementById('recL').value, {method: 'POST'}).then(() => alert("Zapisane!")); }
-    function saveLimits(e) { e.preventDefault(); fetch('/api/set_limits?min='+document.getElementById('minL').value+'&max='+document.getElementById('maxL').value, {method: 'POST'}).then(() => alert("Zapisane!")); }
-    function savePID(e) { e.preventDefault(); fetch('/api/set_pid?kp='+document.getElementById('kp').value+'&ki='+document.getElementById('ki').value+'&kd='+document.getElementById('kd').value, {method: 'POST'}).then(() => alert("Zapisane!")); }
-    function saveCalib(e) { e.preventDefault(); fetch('/api/set_calib?c1='+document.getElementById('dac1c').value+'&c2='+document.getElementById('dac2c').value, {method: 'POST'}).then(() => alert("Zapisane!")); }
-    function saveVoltLimits(e) { e.preventDefault(); fetch('/api/set_volt_limits?min='+document.getElementById('minV').value+'&max='+document.getElementById('maxV').value, {method: 'POST'}).then(() => alert("Zapisane!")); }
-    function saveWiFi(e) { e.preventDefault(); fetch('/api/set_wifi?s='+encodeURIComponent(document.getElementById('wifiSSID').value)+'&p='+encodeURIComponent(document.getElementById('wifiPASS').value), {method: 'POST'}).then(() => { alert("Zapisane! Restart..."); setTimeout(() => location.reload(), 8000); }); }
-    function saveMQTT(e) { e.preventDefault(); fetch('/api/set_mqtt?srv='+encodeURIComponent(document.getElementById('mqSrv').value)+'&usr='+encodeURIComponent(document.getElementById('mqUsr').value)+'&pas='+encodeURIComponent(document.getElementById('mqPas').value)+'&id='+encodeURIComponent(document.getElementById('mqId').value), {method: 'POST'}).then(() => { alert("Zapisane! Restart..."); setTimeout(() => location.reload(), 8000); }); }
-    function restartESP() { if(confirm("Zrestartować procesor?")) { fetch('/api/restart', {method: 'POST'}).then(() => { alert("Restart..."); setTimeout(() => location.reload(), 10000); }); } }
-    function saveDefaults() { if(confirm("ZAPISAĆ DOMYŚLNE?")) { fetch('/api/save_defaults', {method: 'POST'}).then(() => alert("Zapisane na stałe!")); } }
-    function restoreDefaults() { if(confirm("PRZYWRÓCIĆ DOMYŚLNE?")) { fetch('/api/restore_defaults', {method: 'POST'}).then(() => { alert("Przywrócono! Restart..."); setTimeout(() => location.reload(), 8000); }); } }
-    function loadSD() { document.getElementById('sd-list').innerHTML = "Ładowanie..."; fetch('/api/sd_list').then(res => res.json()).then(data => { let html = ""; data.forEach(f => { html += `<div class='file-item'><a href='/sd_read?f=${f.name}' target='_blank'>📄 ${f.name}</a> <span>${f.size} KB</span></div>`; }); if(html === "") html = "Brak plików."; document.getElementById('sd-list').innerHTML = html; }); }
-
-    document.getElementById('upload_form').addEventListener('submit', function(e) { e.preventDefault(); var file = document.getElementById('file').files[0]; if(!file) return; var data = new FormData(); data.append('update', file, file.name); document.getElementById('prog-container').style.display = 'block'; document.getElementById('ota-status').innerText = "Wgrywanie..."; var xhr = new XMLHttpRequest(); xhr.open('POST', '/update', true); xhr.upload.addEventListener('progress', function(e) { if (e.lengthComputable) { var percent = Math.round((e.loaded / e.total) * 100); document.getElementById('prog-bar').style.width = percent + '%'; document.getElementById('prog-bar').innerText = percent + '%'; } }); xhr.onload = function() { if(xhr.status === 200) { document.getElementById('ota-status').style.color = "var(--green)"; document.getElementById('ota-status').innerText = "Sukces! Trwa restart..."; setTimeout(() => location.reload(), 5000); } else { document.getElementById('ota-status').style.color = "var(--red)"; document.getElementById('ota-status').innerText = "Błąd aktualizacji!"; } }; xhr.send(data); });
+    function saveRatios(e) { e.preventDefault(); fetch('/api/set_ratios?r1='+document.getElementById('dac1r').value+'&r2='+document.getElementById('dac2r').value, {method: 'POST'}).then(() => alert("Zapisano!")); }
+    function saveAlarms(e) { e.preventDefault(); fetch('/api/set_alarms?ov='+document.getElementById('ovL').value+'&rec='+document.getElementById('recL').value, {method: 'POST'}).then(() => alert("Zapisano!")); }
+    function saveLimits(e) { e.preventDefault(); fetch('/api/set_limits?min='+document.getElementById('minL').value+'&max='+document.getElementById('maxL').value, {method: 'POST'}).then(() => alert("Zapisano!")); }
+    function savePID(e) { e.preventDefault(); fetch('/api/set_pid?kp='+document.getElementById('kp').value+'&ki='+document.getElementById('ki').value+'&kd='+document.getElementById('kd').value, {method: 'POST'}).then(() => alert("Zapisano!")); }
+    function saveCalib(e) { e.preventDefault(); fetch('/api/set_calib?c1='+document.getElementById('dac1c').value+'&c2='+document.getElementById('dac2c').value, {method: 'POST'}).then(() => alert("Zapisano!")); }
+    function saveVoltLimits(e) { e.preventDefault(); fetch('/api/set_volt_limits?min='+document.getElementById('minV').value+'&max='+document.getElementById('maxV').value, {method: 'POST'}).then(() => alert("Zapisano!")); }
+    function saveWiFi(e) { e.preventDefault(); fetch('/api/set_wifi?s='+encodeURIComponent(document.getElementById('wifiSSID').value)+'&p='+encodeURIComponent(document.getElementById('wifiPASS').value), {method: 'POST'}).then(() => { alert("Restart..."); setTimeout(() => location.reload(), 8000); }); }
+    function saveMQTT(e) { e.preventDefault(); fetch('/api/set_mqtt?srv='+encodeURIComponent(document.getElementById('mqSrv').value)+'&usr='+encodeURIComponent(document.getElementById('mqUsr').value)+'&pas='+encodeURIComponent(document.getElementById('mqPas').value)+'&id='+encodeURIComponent(document.getElementById('mqId').value), {method: 'POST'}).then(() => { alert("Restart..."); setTimeout(() => location.reload(), 8000); }); }
+    function restartESP() { if(confirm("Zrestartować?")) fetch('/api/restart', {method: 'POST'}).then(() => setTimeout(() => location.reload(), 10000)); }
+    function saveDefaults() { if(confirm("Zapisać domyślne?")) fetch('/api/save_defaults', {method: 'POST'}).then(() => alert("Zapisano!")); }
+    function restoreDefaults() { if(confirm("Przywrócić?")) fetch('/api/restore_defaults', {method: 'POST'}).then(() => setTimeout(() => location.reload(), 8000)); }
+    function loadSD() { document.getElementById('sd-list').innerHTML = "Ładowanie..."; fetch('/api/sd_list').then(r => r.json()).then(d => { let h = ""; d.forEach(f => { h += `<div class='file-item'><a href='/sd_read?f=${f.name}'>${f.name}</a><span>${f.size} KB</span></div>`; }); document.getElementById('sd-list').innerHTML = h || "Brak"; }); }
+    
+    document.getElementById('upload_form').addEventListener('submit', function(e) { e.preventDefault(); var f = document.getElementById('file').files[0]; if(!f) return; var d = new FormData(); d.append('update', f, f.name); document.getElementById('prog-container').style.display = 'block'; document.getElementById('ota-status').innerText = "Wgrywanie..."; var x = new XMLHttpRequest(); x.open('POST', '/update', true); x.upload.addEventListener('progress', function(e) { if(e.lengthComputable) { var p = Math.round((e.loaded/e.total)*100); document.getElementById('prog-bar').style.width = p+'%'; document.getElementById('prog-bar').innerText = p+'%'; } }); x.onload = function() { document.getElementById('ota-status').innerText = x.status==200 ? "Sukces! Restart..." : "Błąd!"; if(x.status==200) setTimeout(()=>location.reload(), 5000); }; x.send(d); });
   </script>
 </body>
 </html>
