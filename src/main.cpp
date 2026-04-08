@@ -1,64 +1,74 @@
-// ================================================================
-// REGULATOR PID - V16.5 (SMART OTA, CZYSTY KOD, CHUNKING)
-// ================================================================
+// =====================================================================================
+// REGULATOR PID - V16.5 (SMART OTA, CZYSTY KOD, CHUNKING, FULL COMMENTS)
+// =====================================================================================
 #include <Arduino.h>
-#include "strona_www.h" 
-#include <Wire.h>
-#include <SPI.h>
-#include <SD.h>
-#include <PZEM004Tv30.h>
-#include <EasyNextionLibrary.h>
-#include <DFRobot_GP8403.h>
-#include <Adafruit_ADS1X15.h>
-#include <PID_v1.h>
-#include <DHT.h>
-#include <Preferences.h>
-#include <WiFi.h>              
-#include <WiFiClientSecure.h>
-#include <ESPmDNS.h>           
-#include <WebServer.h>         
-#include <Update.h>            
-#include <HTTPClient.h>
-#include <PubSubClient.h>
+#include "strona_www.h" // Załączenie naszej zewnętrznej strony HTML/CSS/JS
 
-// ================================================================
-// PINOLOGIA
-// ================================================================
-#define PIN_PZEM_RX     4
-#define PIN_PZEM_TX     5
-#define PIN_I2C_SDA     2
-#define PIN_I2C_SCL     1
-#define PIN_RELAY_1     47
-#define PIN_RELAY_2     38
-#define PIN_NEXT_RX     13
-#define PIN_NEXT_TX     14
-#define PIN_DHT         20
-#define PIN_SD_CS       15
-#define PIN_SD_SCK      16
-#define PIN_SD_MOSI     17
-#define PIN_SD_MISO     18
+// --- BIBLIOTEKI SPRZĘTOWE I SENSORY ---
+#include <Wire.h>               // Komunikacja I2C (Zadajnik, Falowniki)
+#include <SPI.h>                // Komunikacja SPI (Karta SD)
+#include <SD.h>                 // Obsługa systemu plików na karcie SD
+#include <PZEM004Tv30.h>        // Miernik parametrów sieci elektrycznej
+#include <EasyNextionLibrary.h> // Obsługa fizycznego ekranu dotykowego Nextion
+#include <DFRobot_GP8403.h>     // Przetwornik cyfrowo-analogowy (DAC) dla falowników
+#include <Adafruit_ADS1X15.h>   // Precyzyjny przetwornik analogowo-cyfrowy (ADC) zadajnika
+#include <PID_v1.h>             // Biblioteka matematyczna algorytmu PID
+#include <DHT.h>                // Czujnik temperatury i wilgotności
+
+// --- BIBLIOTEKI SIECIOWE I SYSTEMOWE ---
+#include <Preferences.h>        // Zapisywanie ustawień w trwałej pamięci Flash (odpowiednik EEPROM)
+#include <WiFi.h>               // Obsługa rdzenia WiFi
+#include <WiFiClientSecure.h>   // Bezpieczny klient HTTPS (wymagany do GitHuba)
+#include <ESPmDNS.h>            // Przyjazne adresy w sieci lokalnej (np. granulator.local)
+#include <WebServer.h>          // Lokalny serwer strony WWW
+#include <Update.h>             // Wbudowana biblioteka obsługująca nadpisywanie Flash (OTA)
+#include <HTTPClient.h>         // Klient HTTP do pobierania plików
+#include <PubSubClient.h>       // Klient protokołu MQTT (HiveMQ)
+
+// =====================================================================================
+// DEFINICJE PINÓW (PINOLOGIA)
+// =====================================================================================
+#define PIN_PZEM_RX       4
+#define PIN_PZEM_TX       5
+#define PIN_I2C_SDA       2
+#define PIN_I2C_SCL       1
+#define PIN_RELAY_1       47
+#define PIN_RELAY_2       38
+#define PIN_NEXT_RX       13
+#define PIN_NEXT_TX       14
+#define PIN_DHT           20
+#define PIN_SD_CS         15
+#define PIN_SD_SCK        16
+#define PIN_SD_MOSI       17
+#define PIN_SD_MISO       18
 #define PIN_POT_SYMULACJA 3 
-#define PIN_LED 2 
+#define PIN_LED           2 
 
-#define RELAY_ON        LOW
-#define RELAY_OFF       HIGH
+// Logika przekaźników (zależna od modułu - tu stan niski załącza przekaźnik)
+#define RELAY_ON          LOW
+#define RELAY_OFF         HIGH
 
-// ================================================================
-// TWORZENIE OBIEKTÓW
-// ================================================================
+// =====================================================================================
+// INICJALIZACJA OBIEKTÓW GLOBALNYCH
+// =====================================================================================
 HardwareSerial NextionSerial(1);
 HardwareSerial PzemSerial(2);
+
 EasyNex myNex(NextionSerial);
 PZEM004Tv30 pzem(PzemSerial, PIN_PZEM_RX, PIN_PZEM_TX);
 DHT dht(PIN_DHT, DHT11);
-DFRobot_GP8403 dac(&Wire, 0x58);
-Adafruit_ADS1115 ads;
+DFRobot_GP8403 dac(&Wire, 0x58); // Adres I2C układu DAC to 0x58
+Adafruit_ADS1115 ads;            // Domyślny adres I2C układu ADS to 0x48
+
 Preferences memory;
 WebServer server(80); 
 
 WiFiClientSecure espClient; 
 PubSubClient mqtt(espClient);
 
+// =====================================================================================
+// ZMIENNE GLOBALNE I USTAWIENIA
+// =====================================================================================
 // --- PARAMETRY PID ---
 double Setpoint; 
 double Input; 
@@ -68,13 +78,14 @@ double Ki = 0.1;
 double Kd = 0.15; 
 PID myPID(&Input, &Output, &Setpoint, Kp, Ki, Kd, DIRECT);
 
-// --- KONFIGURACJA SPRZĘTOWA ---
+// --- KONFIGURACJA SPRZĘTOWA (FALOWNIKI) ---
 int outMode = 0; 
 float minDacVolt = 3.5; 
 float maxDacVolt = 10.0; 
 float dac1Calib = 0.0; 
 float dac2Calib = 0.0;
 
+// --- DANE LOGOWANIA (WIFI I CHMURA) ---
 String routerSSID = ""; 
 String routerPASS = "";
 String mqtt_server = ""; 
@@ -82,9 +93,7 @@ String mqtt_user = "";
 String mqtt_pass = ""; 
 String mqtt_id = "Granulator_01";
 
-// ================================================================
-// ZMIENNE GLOBALNE
-// ================================================================
+// --- WIDEŁKI I ALARMY MASZYNY ---
 float minLimit = 10.0; 
 float maxLimit = 40.0; 
 float dac1Ratio = 100.0; 
@@ -92,18 +101,21 @@ float dac2Ratio = 90.0;
 float overloadLimit = 7.0; 
 float recoveryLimit = 2.0; 
 
+// --- STANY LOGICZNE SYSTEMU ---
 bool systemON = false; 
 bool modeAUTO = true; 
 bool trippedByOverload = false;
-bool cloudEcoMode = false; 
+bool cloudEcoMode = false; // Tryb oszczędzania danych chmury
 
-// Zmienne do obsługi statusu zdalnego pobierania OTA
-int remoteOtaProgress = -1; // -1 oznacza, że OTA nie jest w toku
+// --- STATUS ZDALNEJ AKTUALIZACJI Z GITHUBA (OTA) ---
+int remoteOtaProgress = -1; // Wartość -1 oznacza, że pobieranie się nie toczy
 String remoteOtaState = "";
 
+// --- ZMIENNE POMOCNICZE, TIMERY I FILTRY ---
 float napiecieZadajnika = 0.0; 
 float currentDac1 = 0.0; 
 float currentDac2 = 0.0;
+
 unsigned long lastUpdate = 0; 
 unsigned long lastFastUpdate = 0;
 unsigned long lastPIDTime = 0; 
@@ -119,8 +131,9 @@ bool resetStage3 = false;
 unsigned long factoryResetPressTime = 0; 
 bool isFactoryResetPressed = false;
 
-const float WSPOLCZYNNIK_DZIELNIKA = 1.982; 
-float filtr_waga = 0.15;
+const float WSPOLCZYNNIK_DZIELNIKA = 1.982; // Fizyczny przelicznik dzielnika napięcia na zadajniku
+float filtr_waga = 0.15;                    // Wygładzanie skoków zadajnika (Low-Pass Filter)
+
 const int BUTTON_PIN = 0; 
 bool trybTestowy = false; 
 float current_Amps = 0.0;
@@ -139,6 +152,7 @@ int blinkCount = 0;
 int blinkMax = 0; 
 int blinkDuration = 100; 
 
+// --- FLAGI ZDROWIA (DIAGNOSTYKA SENSORÓW) ---
 bool statusDAC = false; 
 bool statusADS = false; 
 bool statusSD = false; 
@@ -148,9 +162,9 @@ unsigned long lastNextionResponseTime = 0;
 float pzem_u = 0, pzem_p = 0, pzem_pf = 0, pzem_s = 0, pzem_q = 0;
 float dht_t = 0, dht_h = 0;
 
-// ================================================================
-// DEKLARACJE WYPRZEDZAJĄCE
-// ================================================================
+// =====================================================================================
+// DEKLARACJE WYPRZEDZAJĄCE (Zabezpieczenie kompilatora przed brakiem referencji)
+// =====================================================================================
 void startRegulator(); 
 void stopRegulator(); 
 void updateSettingsScreen(); 
@@ -163,9 +177,11 @@ void handleNextionInput();
 void processButtonAction(int id); 
 void updateNextionEcoText();
 
-// ================================================================
-// FUNKCJE POMOCNICZE
-// ================================================================
+// =====================================================================================
+// FUNKCJE POMOCNICZE I SYSTEMOWE
+// =====================================================================================
+
+// Czyści wklejany adres serwera z niepotrzebnych przedrostków i portów
 String cleanHostAddress(String host) {
     String clean = host; 
     clean.replace("http://", ""); 
@@ -178,6 +194,7 @@ String cleanHostAddress(String host) {
     return clean;
 }
 
+// Uruchamia sekwencję mignięć wbudowanej diody LED
 void triggerBlink(int times, int duration) {
     blinkMax = times * 2; 
     blinkCount = 0; 
@@ -188,6 +205,7 @@ void triggerBlink(int times, int duration) {
     blinkCount++;
 }
 
+// Obsługa nieblokującego migania diody LED w głównej pętli
 void handleLED() {
     if (blinkCount > 0 && blinkCount < blinkMax) {
         if (millis() - ledTimer >= blinkDuration) { 
@@ -202,6 +220,7 @@ void handleLED() {
     }
 }
 
+// Inicjalizacja i sprawdzenie karty pamięci SD
 void initSD() {
     SPI.begin(PIN_SD_SCK, PIN_SD_MISO, PIN_SD_MOSI, PIN_SD_CS); 
     if (SD.begin(PIN_SD_CS)) { 
@@ -217,18 +236,22 @@ void initSD() {
     }
 }
 
+// Aplikuje limity dolne i górne dla układu DAC oraz algorytmu PID
 void applyOutputMode() {
     myPID.SetOutputLimits(minDacVolt, maxDacVolt); 
     memory.putInt("outMode", outMode);
 }
 
+// Przełącza maszynę z trybu Router (Client) na tryb Sieci Lokalnej (Access Point)
 void toggleLocalWiFi() {
     int apState = memory.getInt("apState", 1); 
     apState = (apState == 1) ? 0 : 1; 
     
+    // Zabezpieczenie: Nie można wyłączyć AP, jeśli nie wpisano danych do domowego routera
     if (apState == 0 && routerSSID == "") {
         apState = 1;
     }
+    
     memory.putInt("apState", apState);
     
     if (apState == 1) {
@@ -244,6 +267,7 @@ void toggleLocalWiFi() {
     }
 }
 
+// Tworzy JSON z listą plików na karcie SD i wysyła przez MQTT
 void publishSDList() {
     if (SD.cardType() == CARD_NONE) {
         return;
@@ -272,6 +296,7 @@ void publishSDList() {
     mqtt.endPublish();
 }
 
+// Zmienia napis na ekranie Nextion informujący o trybie danych do chmury
 void updateNextionEcoText() {
     if (cloudEcoMode) {
         myNex.writeStr("page4.mqtttext.txt", "Eco");
@@ -280,28 +305,30 @@ void updateNextionEcoText() {
     }
 }
 
-// ================================================================
-// INTELIGENTNE OTA (CHUNKING + REDIRECTS)
-// ================================================================
+// =====================================================================================
+// INTELIGENTNY SILNIK OTA (ZDALNA AKTUALIZACJA Z GITHUBA)
+// =====================================================================================
 void performRemoteOTA(String url) {
     Serial.println("[OTA] Otrzymano rozkaz aktualizacji z chmury!");
     Serial.println("[OTA] URL: " + url);
-    stopRegulator(); 
+    stopRegulator(); // Ze względów bezpieczeństwa natychmiast zatrzymujemy maszynę
     
     remoteOtaProgress = 0;
     remoteOtaState = "Nawiązywanie połączenia i szukanie pliku...";
     
+    // Konfiguracja bezpiecznego klienta omijającego weryfikację certyfikatu SSL (niezbędne dla GitHuba)
     WiFiClientSecure otaClient;
-    otaClient.setInsecure(); // Ominięcie weryfikacji certyfikatu SSL
+    otaClient.setInsecure(); 
     
     HTTPClient http; 
     http.begin(otaClient, url); 
     
-    // MAGIA INŻYNIERII: Maszyna sama idzie za przekierowaniem GitHuba!
+    // Kluczowa linijka: Rozwiązuje problem "HTTP 302 Redirect" narzucany przez serwery GitHub
     http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
     
     int httpCode = http.GET();
     
+    // Kody 200 (OK) lub 206 (Partial Content) oznaczają, że plik fizycznie tam jest
     if (httpCode == 200 || httpCode == 206) {
         int contentLength = http.getSize(); 
         Serial.println("[OTA] Rozmiar pliku: " + String(contentLength) + " bajtow.");
@@ -311,37 +338,44 @@ void performRemoteOTA(String url) {
         if (canBegin) {
             WiFiClient& client = http.getStream(); 
             size_t written = 0;
-            uint8_t buff[512] = { 0 }; // Bufor paczkowania (Chunking)
+            uint8_t buff[512] = { 0 }; // Ustawiamy bufor na małe paczki 512-bajtowe
             
             while (http.connected() && (contentLength > 0 || contentLength == -1)) {
                 size_t size = client.available();
                 if (size) {
+                    // Odczytujemy paczkę z sieci
                     int c = client.readBytes(buff, ((size > sizeof(buff)) ? sizeof(buff) : size));
+                    // Wgrywamy paczkę bezpośrednio do pamięci Flash mikrokontrolera
                     Update.write(buff, c);
                     written += c;
                     
+                    // Aktualizujemy globalną zmienną postępu
                     if (contentLength > 0) {
                         remoteOtaProgress = (written * 100) / contentLength;
                     }
                     
-                    // Niezwykle ważne: pozwalamy serwerowi WWW obsłużyć panel z paskiem postępu!
+                    // MAGIA: W międzyczasie serwer obsługuje żądania z przeglądarki (pokazuje pasek!)
                     server.handleClient(); 
+                    // Obsługujemy również ekran fizyczny Nextion, by się nie zawiesił
                     handleNextionInput();
                 }
                 delay(1);
+                
+                // Przerwanie pętli, gdy całość zostanie pobrana
                 if (contentLength > 0 && written >= contentLength) {
                     break;
                 }
             }
             
+            // Weryfikacja integralności wgranego pliku
             if (Update.end()) { 
                 remoteOtaState = "Zakończono sukcesem! Restartowanie...";
                 remoteOtaProgress = 100;
-                server.handleClient(); // Wysłanie ostatniego 100% do WWW
+                server.handleClient(); // Pchamy ostatnie żądanie do przeglądarki na 100%
                 
                 Serial.println("[OTA] Sukces. Maszyna zrestartuje sie za 3 sekundy.");
                 delay(3000); 
-                ESP.restart(); 
+                ESP.restart(); // Restart procesora z nowym firmware!
             } else {
                 remoteOtaState = "Błąd zapisu do pamięci Flash!";
                 remoteOtaProgress = -1;
@@ -360,23 +394,24 @@ void performRemoteOTA(String url) {
     
     http.end();
     
-    // Jeśli był błąd, pokazuj komunikat przez 5 sekund i zamknij okno OTA
+    // Jeśli nastąpił błąd (-1), wyświetlamy komunikat przez 5 sek, a potem gasimy okno na WWW
     if (remoteOtaProgress == -1) {
         delay(5000); 
         remoteOtaState = "";
     }
 }
 
-// ================================================================
-// OBSŁUGA MQTT Z CHMURY
-// ================================================================
+// =====================================================================================
+// OBSŁUGA PROTOKOŁU MQTT Z CHMURY (Odbieranie rozkazów)
+// =====================================================================================
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
     String msg = ""; 
     for (int i = 0; i < length; i++) {
         msg += (char)payload[i];
     }
-    Serial.println("[MQTT] Rozkaz: " + msg);
+    Serial.println("[MQTT] Otrzymano rozkaz: " + msg);
 
+    // Reakcje na polecenia dyspozytorskie
     if (msg == "SYSTEM=ON") { 
         startRegulator(); 
     }
@@ -405,6 +440,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     else if (msg.startsWith("OTA=")) { 
         performRemoteOTA(msg.substring(4)); 
     }
+    // Reakcje na polecenia nastawień z formularzy
     else if (msg.startsWith("CMD:LIMITS:")) {
         int p1 = msg.indexOf(':', 11); 
         minLimit = msg.substring(11, p1).toFloat(); 
@@ -503,37 +539,52 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
         ESP.restart();
     }
     
+    // Potwierdzenie odebrania komunikatu mignięciem LED
     triggerBlink(2, 100); 
 }
 
+// Funkcja obsługująca utrzymanie połączenia z serwerem HiveMQ
 void handleMQTT() {
+    // Przerywamy, jeśli brak konfiguracji lub brak połączenia z siecią
     if (mqtt_server == "" || routerSSID == "") return;
     if (WiFi.status() != WL_CONNECTED || WiFi.localIP().toString() == "0.0.0.0") return;
 
     if (!mqtt.connected()) {
+        // Próba wznowienia połączenia co 15 sekund
         if (millis() - lastMqttReconnect > 15000) {
             lastMqttReconnect = millis();
             espClient.stop(); 
             espClient.setInsecure();
             
             String clientId = mqtt_id + "-" + String(random(0xffff), HEX);
+            Serial.print("[MQTT] Łączenie z brokerem...");
             
             if (mqtt.connect(clientId.c_str(), mqtt_user.c_str(), mqtt_pass.c_str())) {
+                Serial.println(" POŁĄCZONO!");
                 String subTopic = "biuro/" + mqtt_id + "/rozkazy";
                 mqtt.subscribe(subTopic.c_str());
+            } else {
+                Serial.print(" BŁĄD! Kod=");
+                Serial.println(mqtt.state());
             }
         }
     } else {
+        // Podtrzymanie nasłuchu
         mqtt.loop();
         
+        // Zależnie od Trybu ECO, ładunek wysyłamy co 8 sekund (cienko) lub co 3 sekundy (grubo)
         unsigned long interwalWysylki = cloudEcoMode ? 8000 : 3000;
 
         if (millis() - lastMqttPublish > interwalWysylki) {
             lastMqttPublish = millis();
             String json; 
-            json.reserve(1200); 
+            json.reserve(1200); // Rezerwacja pamięci w celu uniknięcia fragmentacji RAM
             
             if (cloudEcoMode) {
+                // ==========================
+                // TRYB ECO: Pakiet Thin JSON
+                // Oszczędza aż 95% danych transferu
+                // ==========================
                 json = "{";
                 json += "\"eco\":1,";
                 json += "\"amp\":" + String(current_Amps, 2) + ",";
@@ -542,6 +593,10 @@ void handleMQTT() {
                 json += "\"autoM\":" + String(modeAUTO ? 1 : 0);
                 json += "}";
             } else {
+                // ==========================
+                // TRYB MAX: Pakiet Thick JSON
+                // Pełen raport diagnostyczny systemu
+                // ==========================
                 float safe_temp = isnan(dht_t) ? 0.0 : dht_t; 
                 float safe_hum = isnan(dht_h) ? 0.0 : dht_h; 
                 float safe_pf = isnan(pzem_pf) ? 0.0 : pzem_pf;
@@ -564,16 +619,18 @@ void handleMQTT() {
                 json += "\"wifi_s\":\"" + routerSSID + "\",\"mq_srv\":\"" + mqtt_server + "\",\"mq_usr\":\"" + mqtt_user + "\",\"mq_id\":\"" + mqtt_id + "\",\"ip\":\"" + WiFi.localIP().toString() + "\"}";
             }
             
-            mqtt.beginPublish(("biuro/" + mqtt_id + "/dane").c_str(), json.length(), false); 
+            // Wysłanie zbudowanego ładunku do chmury
+            String pubTopic = "biuro/" + mqtt_id + "/dane";
+            mqtt.beginPublish(pubTopic.c_str(), json.length(), false); 
             mqtt.print(json); 
             mqtt.endPublish();
         }
     }
 }
 
-// ================================================================
-// BRAMKA WWW I API 
-// ================================================================
+// =====================================================================================
+// BRAMKA LOKALNEGO SERWERA WWW I API
+// =====================================================================================
 bool checkAuth() { 
     if (!server.authenticate("admin", "regpid12")) { 
         server.requestAuthentication(); 
@@ -582,7 +639,7 @@ bool checkAuth() {
     return true; 
 }
 
-// ENDPOINT DLA ZASŁANIACZA OTA Z PASKIEM POSTĘPU
+// Obsługa nakładki graficznej OTA na stronie WWW
 void handleOtaStatus() {
     if (!checkAuth()) return;
     
@@ -594,6 +651,7 @@ void handleOtaStatus() {
     server.send(200, "application/json", json);
 }
 
+// Generowanie paczki JSON dla lokalnego wyświetlania WWW (Co sekundę)
 void handleApiData() {
     if (!checkAuth()) return;
     
@@ -611,6 +669,7 @@ void handleApiData() {
     server.send(200, "application/json", json);
 }
 
+// Generowanie diagnostyki zdrowia podzespołów maszyny
 void handleApiHealth() {
     if (!checkAuth()) return;
     
@@ -639,6 +698,7 @@ void handleApiHealth() {
     server.send(200, "application/json", json);
 }
 
+// Funkcje wywoływane wciśnięciem przycisków na panelu WWW
 void handleToggleEco() { 
     if (!checkAuth()) return; 
     cloudEcoMode = !cloudEcoMode; 
@@ -664,6 +724,7 @@ void handleToggleMode() {
     server.send(200, "text/plain", "OK"); 
 }
 
+// Funkcje odbierające dane z formularzy WWW i zapisujące w pamięci urządzenia
 void handleSetOutMode() { 
     if (!checkAuth()) return; 
     if (server.hasArg("m")) { 
@@ -881,18 +942,19 @@ void handleSDList() {
 void handleSDRead() { 
     if (!checkAuth()) return; 
     if (!server.hasArg("f")) { 
-        server.send(400, "text/plain", "Brak"); 
+        server.send(400, "text/plain", "Brak pliku"); 
         return; 
     } 
     File file = SD.open("/" + server.arg("f"), FILE_READ); 
     if (!file) { 
-        server.send(404, "text/plain", "Brak"); 
+        server.send(404, "text/plain", "Nie odnaleziono"); 
         return; 
     } 
     server.streamFile(file, "text/plain"); 
     file.close(); 
 }
 
+// Konfiguracja i uruchomienie serwera WWW maszyny
 void setupWiFi() {
     int apState = memory.getInt("apState", 1); 
     WiFi.disconnect(true); 
@@ -908,6 +970,7 @@ void setupWiFi() {
         memory.putInt("apState", 1); 
     }
     
+    // Konfiguracja stacji nadawczej Access Point
     if (apState == 1) { 
         IPAddress local_ip(192, 168, 5, 1); 
         IPAddress gateway(192, 168, 5, 1); 
@@ -917,6 +980,7 @@ void setupWiFi() {
     }
     MDNS.begin("granulator");
     
+    // Definiowanie reakcji serwera WWW na żądania pod konkretnymi adresami URI
     server.on("/", HTTP_GET, []() { 
         if (checkAuth()) {
             server.send(200, "text/html", INDEX_HTML); 
@@ -925,10 +989,7 @@ void setupWiFi() {
     
     server.on("/api/data", HTTP_GET, handleApiData); 
     server.on("/api/health", HTTP_GET, handleApiHealth);
-    
-    // --- ENDPOINT DLA ZASŁANIACZA OTA Z PASKIEM POSTĘPU ---
     server.on("/api/ota_status", HTTP_GET, handleOtaStatus);
-    
     server.on("/api/toggle_sys", HTTP_POST, handleToggleSys); 
     server.on("/api/toggle_mode", HTTP_POST, handleToggleMode); 
     server.on("/api/toggle_eco", HTTP_POST, handleToggleEco);
@@ -947,6 +1008,7 @@ void setupWiFi() {
     server.on("/api/sd_list", HTTP_GET, handleSDList); 
     server.on("/sd_read", HTTP_GET, handleSDRead);
     
+    // Procedura przyjmowania pliku lokalnego OTA wysyłanego z przeglądarki
     server.on("/update", HTTP_POST, []() { 
         if (checkAuth()) { 
             server.sendHeader("Connection", "close"); 
@@ -980,13 +1042,15 @@ void onStationConnected(WiFiEvent_t event, WiFiEventInfo_t info) {
     triggerBlink(2, 200); 
 }
 
-// ================================================================
-// LOGIKA STEROWANIA SYSTEMEM
-// ================================================================
+// =====================================================================================
+// LOGIKA STEROWANIA SYSTEMEM PID I FALOWNIKAMI
+// =====================================================================================
 void startRegulator() {
     systemON = true; 
     trippedByOverload = false; 
     myNex.writeStr("pidonoff.txt", "ON"); 
+    
+    // Przechodzimy na chwilę w tryb manualny by bezpiecznie wystartować maszynę
     myPID.SetMode(MANUAL);          
     
     if (napiecieZadajnika < minDacVolt) {
@@ -1013,12 +1077,15 @@ void startRegulator() {
     
     uint16_t mv_dac1 = (uint16_t)(finalDac1 * 1000.0); 
     uint16_t mv_dac2 = (uint16_t)(finalDac2 * 1000.0);
+    
     dac.setDACOutVoltage(mv_dac1, 0); 
     dac.setDACOutVoltage(mv_dac2, 1);
     delay(50); 
     
     digitalWrite(PIN_RELAY_1, RELAY_ON); 
     digitalWrite(PIN_RELAY_2, RELAY_ON); 
+    
+    // Wracamy do obliczeń zamkniętej pętli sprzężenia zwrotnego
     myPID.SetMode(AUTOMATIC);       
 }
 
@@ -1056,37 +1123,40 @@ void processButtonAction(int id) {
     memory.putFloat("maxLim", maxLimit);
 }
 
+// Zmienne obsługujące płynne podtrzymanie przycisku nastaw na Nextionie
 int activeButtonID = 0; 
 unsigned long buttonHoldTimer = 0; 
 bool isButtonHeld = false;       
 
+// Główne sprzężenie z wyświetlaczem fizycznym (Odbieranie poleceń połączone z parserem biblioteki)
 void handleNextionInput() {
     while (NextionSerial.available()) { 
         byte b = NextionSerial.read(); 
         lastNextionResponseTime = millis(); 
+        
+        // Magiczny bajt poczatkowy protokołu Nextion (0x65 to kod zdarzenia wciśnięcia)
         if (b == 0x65) {                
             delay(15);                   
             if (NextionSerial.available() >= 6) {
                 byte pageId = NextionSerial.read(); 
                 byte cmpId  = NextionSerial.read(); 
                 byte event  = NextionSerial.read(); 
+                // Odczyt i zignorowanie końcówki ramki
                 NextionSerial.read(); 
                 NextionSerial.read(); 
                 NextionSerial.read(); 
                 
+                // Wywołania dla Strony 0 (Panel Główny)
                 if (pageId == 0) {
                     if (cmpId == 11 && event == 0x01) { 
-                        if (systemON) {
-                            stopRegulator(); 
-                        } else {
-                            startRegulator(); 
-                        }
+                        if (systemON) stopRegulator(); else startRegulator(); 
                     }
                     if (cmpId == 12 && event == 0x01) { 
                         modeAUTO = !modeAUTO; 
                         myNex.writeStr("pracaautoman.txt", modeAUTO ? "AUT" : "MAN"); 
                     }
                     if (cmpId == 8) { 
+                        // Zliczanie czasu wciśnięcia dla Resetu Zabezpieczeń
                         if (event == 0x01) { 
                             isResetPressed = true; 
                             resetPressTime = millis(); 
@@ -1106,6 +1176,7 @@ void handleNextionInput() {
                     }
                 }
                 
+                // Wywołania dla Strony 2 (Konfiguracja Limtów)
                 if (pageId == 2) {
                     if (event == 0x01) { 
                         activeButtonID = cmpId; 
@@ -1119,6 +1190,7 @@ void handleNextionInput() {
                     }
                 }
                 
+                // Wywołania dla Strony 4 (Menu Inżynierskie)
                 if (pageId == 4) {
                     if (cmpId == 7 && event == 0x01) { 
                         toggleLocalWiFi(); 
@@ -1133,6 +1205,7 @@ void handleNextionInput() {
                             myNex.writeNum("page4.bco", 65535); 
                         }
                     }
+                    // Obsługa wciśnięcia przycisku Trybu ECO Chmury
                     if (cmpId == 9 && event == 0x01) {
                         cloudEcoMode = !cloudEcoMode; 
                         memory.putBool("cloudEco", cloudEcoMode);
@@ -1143,15 +1216,16 @@ void handleNextionInput() {
         }
     }
     
+    // Automatyczne, ciągłe inkrementowanie wartości wciśniętego klawisza (Hold Action)
     if (isButtonHeld && activeButtonID > 0 && millis() > buttonHoldTimer) { 
         processButtonAction(activeButtonID); 
         buttonHoldTimer = millis() + 100; 
     }
 }
 
-// ================================================================
-// SEKCJA SETUP
-// ================================================================
+// =====================================================================================
+// SEKCJA SETUP (Uruchamiana raz po podłączeniu zasilania)
+// =====================================================================================
 void setup() {
     pinMode(PIN_RELAY_1, OUTPUT); 
     pinMode(PIN_RELAY_2, OUTPUT); 
@@ -1165,8 +1239,9 @@ void setup() {
     
     delay(2000); 
     Serial.begin(115200); 
-    Serial.println("\n\n--- SYSTEM V16.5 (SMART OTA & CHUNKING) ---");
+    Serial.println("\n\n--- SYSTEM V16.5 (PRO OTA & LOGO FRONTEND) ---");
 
+    // Montowanie pamięci masowej układu (Wczytywanie zapisanych ustawień do zmiennych RAM)
     memory.begin("regulator", false); 
     routerSSID = memory.getString("ssid", ""); 
     routerPASS = memory.getString("pass", "");
@@ -1217,6 +1292,7 @@ void setup() {
     espClient.setInsecure(); 
     mqtt.setServer(mqtt_server.c_str(), 8883); 
     mqtt.setCallback(mqttCallback);
+    // Kluczowe rozszerzenie przestrzeni roboczej bufora ładunków JSON
     mqtt.setBufferSize(4096); 
 
     WiFi.onEvent(onStationConnected, ARDUINO_EVENT_WIFI_AP_STACONNECTED); 
@@ -1230,6 +1306,7 @@ void setup() {
     
     Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL); 
     
+    // Pingowanie sprzętu na magistrali I2C (Zabezpieczenie przed zwarciem pinów)
     Wire.beginTransmission(0x48); 
     statusADS = (Wire.endTransmission() == 0); 
     if (statusADS) { 
@@ -1251,6 +1328,7 @@ void setup() {
     myNex.writeStr("pidonoff.txt", "OFF"); 
     myNex.writeStr("pracaautoman.txt", "AUT"); 
     
+    // Inicjalizacja ekranu Nextion wymuszająca zgodność tekstów
     updateNextionEcoText(); 
     stopRegulator(); 
     
@@ -1259,9 +1337,9 @@ void setup() {
     triggerBlink(2, 500); 
 }
 
-// ================================================================
-// GŁÓWNA PĘTLA PROGRAMU
-// ================================================================
+// =====================================================================================
+// GŁÓWNA PĘTLA PROGRAMU (Wykonywana dziesiątki tysięcy razy na sekundę)
+// =====================================================================================
 void loop() {
     handleLED(); 
     handleMQTT();
@@ -1272,6 +1350,7 @@ void loop() {
     
     handleNextionInput(); 
 
+    // Procedura weryfikująca czas przytrzymania ekranowego guzika (Hard Reset)
     if (isResetPressed) {
         unsigned long holdTime = millis() - resetPressTime;
         if (holdTime > 1000 && !resetStage1) { 
@@ -1304,6 +1383,7 @@ void loop() {
         }
     }
 
+    // Obsługa fizycznego przycisku awaryjnego (uruchamiającego Tryb Testowy)
     int buttonState = digitalRead(BUTTON_PIN);
     if (buttonState == LOW && !buttonWasPressed) { 
         buttonPressTime = millis(); 
@@ -1330,6 +1410,7 @@ void loop() {
         clickCount = 0; 
     }
 
+    // Pętla Diagnostyczna - co 2 sekundy sprawdza obecność podzespołów peryferyjnych
     if (millis() - lastDiagnosticTime >= 2000) {
         lastDiagnosticTime = millis();
         Wire.beginTransmission(0x58); 
@@ -1342,12 +1423,14 @@ void loop() {
         float diag_u = pzem.voltage(); 
         statusPZEM = !isnan(diag_u);
         
+        // Cykliczne żądanie do Nextiona, by zgłosił swoją obecność po łączu Serial
         NextionSerial.print("sendme"); 
         NextionSerial.write(0xFF); 
         NextionSerial.write(0xFF); 
         NextionSerial.write(0xFF);
     }
 
+    // Pętla Sterująca 50ms - Zbieranie nastaw z potencjometru ADC i nadawanie na Falowniki
     if (millis() - lastFastUpdate >= 50) {
         lastFastUpdate = millis(); 
         int16_t adc_surowe = 0; 
@@ -1399,12 +1482,14 @@ void loop() {
         }
     }
 
+    // Pętla Obliczeniowa 200ms - Algorytm Zamkniętej Pętli PID i Ochrona Silnika
     if (millis() - lastPIDTime >= 200) {
         lastPIDTime = millis(); 
         float i = pzem.current(); 
         
         if (isnan(i)) i = 0.0;
         
+        // Zastąpienie rzeczywistego prądu sztucznym do testowania algorytmu "na sucho"
         if (trybTestowy) { 
             int pot_raw = analogRead(PIN_POT_SYMULACJA); 
             i = (pot_raw / 4095.0) * 50.0; 
@@ -1416,17 +1501,20 @@ void loop() {
             current_Amps = (i * 0.4) + (current_Amps * 0.6); 
         }
         
+        // Ewaluacja Przeciążenia - System Protection
         if (systemON && current_Amps >= (maxLimit + overloadLimit)) { 
             stopRegulator(); 
             trippedByOverload = true; 
         }
         
+        // Automatyczne wznowienie po opadnięciu uderzenia amperowego
         if (!systemON && trippedByOverload && modeAUTO) { 
             if (current_Amps <= (minLimit + recoveryLimit)) {
                 startRegulator(); 
             }
         }
         
+        // Realizacja wzoru dla biblioteki PID_v1
         if (systemON) { 
             Setpoint = maxLimit - 1.0; 
             Input = current_Amps; 
@@ -1434,6 +1522,7 @@ void loop() {
         }
     }
 
+    // Pętla Interfejsu 1000ms - Wyświetlanie danych na ekranach
     if (millis() - lastUpdate >= 1000) {
         lastUpdate = millis(); 
         pzem_u = pzem.voltage(); 
@@ -1458,19 +1547,14 @@ void loop() {
             }
             
             myNex.writeStr("natgr.txt", buf);
-            
             sprintf(buf, "%.1f V", pzem_u); 
             myNex.writeStr("napgr.txt", buf);
-            
             sprintf(buf, "%.0f W", pzem_p); 
             myNex.writeStr("mocczy.txt", buf);
-            
             sprintf(buf, "%.0f VA", pzem_s); 
             myNex.writeStr("mocpoz.txt", buf);
-            
             sprintf(buf, "%.0f Var", pzem_q); 
             myNex.writeStr("mocbie.txt", buf);
-            
             sprintf(buf, "%.2f", pzem_pf); 
             myNex.writeStr("wspmoc.txt", buf);
         } else { 
