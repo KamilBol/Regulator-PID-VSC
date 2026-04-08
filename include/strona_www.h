@@ -62,7 +62,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
       <p style="color:#aaa; font-size:12px; margin-top:20px;">Nie wyłączaj zasilania maszyny!</p>
   </div>
 
-  <div class="header"><h1>⚙️ Granulator Pro V16.4</h1></div>
+  <div class="header"><h1>⚙️ Granulator V16.6</h1></div>
   
   <div class="nav">
     <button class="tablinks active" onclick="openTab(event, 'Panel')">📊 Panel</button>
