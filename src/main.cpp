@@ -970,17 +970,23 @@ void setupWiFi() {
         memory.putInt("apState", 1); 
     }
     
-    // Konfiguracja stacji nadawczej Access Point
+    // --- INTELIGENTNE NAZWY SIECI (Unikamy pogryzienia się maszyn) ---
     if (apState == 1) { 
         IPAddress local_ip(192, 168, 5, 1); 
         IPAddress gateway(192, 168, 5, 1); 
         IPAddress subnet(255, 255, 255, 0); 
         WiFi.softAPConfig(local_ip, gateway, subnet); 
-        WiFi.softAP("RegulatorPID"); 
+        
+        // Dynamiczna sieć, np. "Regulator_Granulator_01"
+        String apName = "Regulator_" + mqtt_id;
+        WiFi.softAP(apName.c_str()); 
     }
-    MDNS.begin("granulator");
     
-    // Definiowanie reakcji serwera WWW na żądania pod konkretnymi adresami URI
+    // Dynamiczna domena lokalna, np. http://granulator_01.local
+    String mdnsName = mqtt_id;
+    mdnsName.toLowerCase(); // mDNS woli małe litery
+    MDNS.begin(mdnsName.c_str());
+    
     server.on("/", HTTP_GET, []() { 
         if (checkAuth()) {
             server.send(200, "text/html", INDEX_HTML); 
@@ -1008,7 +1014,6 @@ void setupWiFi() {
     server.on("/api/sd_list", HTTP_GET, handleSDList); 
     server.on("/sd_read", HTTP_GET, handleSDRead);
     
-    // Procedura przyjmowania pliku lokalnego OTA wysyłanego z przeglądarki
     server.on("/update", HTTP_POST, []() { 
         if (checkAuth()) { 
             server.sendHeader("Connection", "close"); 
