@@ -1,0 +1,90 @@
+# DOKUMENTACJA TECHNICZNA: REGULATOR PID GRANULATORA (DUAL DRIVE)
+
+**Wersja Systemu:** V16.6 (Smart OTA, IoT, Multi-Node)
+**Platforma:** ESP32-S3 + Nextion HMI + WebServer
+**Autor:** Kamil Ból ("Bólu")
+**Prawa:** Wszelkie prawa zastrzeżone. Projekt nie jest rozwiązaniem Open Source.
+
+---
+
+## 1. SCHEMAT POŁĄCZEŃ (HARDWARE PINOUT)
+Poniższa tabela przedstawia fizyczne przypisanie pinów do układu ESP32-S3. Wersja V16 całkowicie eliminuje awaryjną komunikację Modbus na rzecz precyzyjnego, izolowanego galwanicznie sterowania w standardzie analogowym 0-10V.
+
+| MODUŁ / URZĄDZENIE | PIN ESP32 | PIN MODUŁU / TYP | UWAGI MONTAŻOWE |
+| :--- | :--- | :--- | :--- |
+| **ZASILANIE PŁYTY** | `5V` / `GND` | Zasilacz Przemysłowy | Wymagane stabilne, filtrowane zasilanie 5V. |
+| **NEXTION (Ekran HMI)** | `13` (RX) | TX (Niebieski kabel) | ⚠️ Połączenie krzyżowe (RX-TX). Serial 1. |
+| | `14` (TX) | RX (Żółty kabel) | ⚠️ Połączenie krzyżowe (TX-RX). Serial 1. |
+| **PZEM-004T (Analizator)** | `4` (RX) | TX modułu PZEM | ⚠️ Połączenie krzyżowe. Moduł zasilać z 5V! |
+| | `5` (TX) | RX modułu PZEM | ⚠️ Połączenie krzyżowe. |
+| **MAGISTRALA I2C** | `2` (SDA) | SDA | Szyna wymiany danych (Strefa izolowana ISO1540). |
+| | `1` (SCL) | SCL | Zegar taktujący. |
+| **GP8403 (DAC 0-10V)** | `Szyna I2C` | Wejście I2C | Adres sprzętowy: `0x58`. Sterowanie falownikami. |
+| **ADS1115 (ADC 16-bit)** | `Szyna I2C` | Wejście I2C | Adres sprzętowy: `0x48`. Odczyt zadajnika / potencjometru. |
+| **CZYTNIK KART uSD** | `15` | CS (Chip Select) | Zapis logów przemysłowych na bieżąco. |
+| | `16` | SCK (Zegar SPI) | Magistrala SPI. |
+| | `17` | MOSI (Data Out) | Magistrala SPI. |
+| | `18` | MISO (Data In) | Magistrala SPI. |
+| **DHT11 (Klimat Szafy)** | `20` | DATA | ⚠️ Wymagany rezystor podciągający (Pull-Up) 4.7kΩ do VCC. |
+| **PRZEKAŹNIK 1** | `47` | IN (Digital Out) | Załączenie stycznika głównego (Falownik 1). Logika LOW-Trigger. |
+| **PRZEKAŹNIK 2** | `38` | IN (Digital Out) | Załączenie stycznika wspomagającego (Falownik 2). |
+| **PRZYCISK BOOT** | `0` | Zintegrowany | Uruchamia Tryb Testowy (Hold > 3 sek). |
+| **ZADAJNIK RĘCZNY** | `3` | Analog In | Pasywne wejście potencjometru symulacyjnego (ADC). |
+
+---
+
+## 2. MAPA ADRESOWA NEXTION (Interfejs HMI)
+
+Ekran komunikuje się z płytą główną zdarzeniami przerwań. Poniżej rozkład aktywnych zmiennych. 
+*Wymagania: Wszystkie używane pola testowe na ekranie muszą mieć atrybut `vscope: global`.*
+
+### STRONA 0: PANEL GŁÓWNY (Dashboard)
+| NAZWA OBIEKTU | TYP | FUNKCJA SYSTEMOWA |
+| :--- | :--- | :--- |
+| `granampery` | Text | Wyświetla główne natężenie prądu maszyny (np. "35.500 A"). |
+| `pod1` / `dac1` | Text | Wysterowanie Falownika 1 (Napięcie referencyjne DAC V). |
+| `pod2` / `dac2` | Text | Wysterowanie Falownika 2 (Napięcie referencyjne DAC V). |
+| `wilgotnosc` | Text | Wilgotność w szafie sterowniczej (%). |
+| `temperatura`| Text | Temperatura w szafie sterowniczej (°C). |
+| `pidonoff` | Text | Status pracy zamkniętej pętli (`ON` / `OFF`). |
+| `pracaautoman`| Text | Status trybu maszyny (`AUT` / `MAN`). |
+| Przycisk `ID: 11`| Button | Zdarzenie (Release): Przełącznik zasilania maszyny (Start/Stop). |
+| Przycisk `ID: 12`| Button | Zdarzenie (Release): Przełącznik trybu Auto / Manual. |
+| Przycisk `ID: 8` | Button | Zdarzenie (Hold > 3s): Rozpoczyna twardy reset (Kasowanie awarii). |
+
+### STRONA 2: USTAWIENIA WIDEŁEK (Limity)
+| NAZWA OBIEKTU | TYP | FUNKCJA SYSTEMOWA |
+| :--- | :--- | :--- |
+| `min` | Text | Odczyt aktualnego Limitu Wznowienia pracy. |
+| `max` | Text | Odczyt Limitu Bezpieczeństwa (Target PID). |
+| Przyciski `ID: 1-4`| Button | Zdarzenia: Modyfikacja inkrementacyjna wartości w locie. |
+
+### STRONA 4: DIAGNOSTYKA I CHMURA (Menu Inżynierskie)
+| NAZWA OBIEKTU | TYP | FUNKCJA SYSTEMOWA |
+| :--- | :--- | :--- |
+| `page4.ip` | Text | Wyświetla przydzielony przez router adres IP lub lokalne IP AP. |
+| `page4.wifilokalonoff` | Text | Sygnalizuje czy maszyna nadaje awaryjną sieć WiFi (ON/OFF). |
+| `page4.mqtttext` | Text | Status ładunku MQTT (ECO - tryb cienki / MAX - tryb analityczny). |
+| Przycisk `ID: 7` | Button | Twarde przełączenie maszyny w tryb Access Point. |
+| Przycisk `ID: 8` | Button | Factory Reset (Wymaga przytrzymania dla ochrony przed kliknięciem). |
+| Przycisk `ID: 9` | Button | Przełącznik pakietów chmurowych (Eco/Max). |
+
+### STRONA 7: PARAMETRY ZASILANIA (PZEM-004T)
+Odczyt surowy bezpośrednio z magistrali układu mierzącego wejście 3-fazowe maszyny.
+* `napgr` - Napięcie (V)
+* `natgr` - Prąd pobierany (A)
+* `mocczy` - Moc Czynna (W)
+* `mocpoz` - Moc Pozorna (VA)
+* `mocbie` - Moc Bierna (Var)
+* `wspmoc` - Współczynnik Mocy sieci (PF)
+* `sd` - Pamięć masowa włożonej karty logującej.
+
+---
+
+## 3. LOKALIZACJA KODU ŹRÓDŁOWEGO
+Z uwagi na dynamiczny rozwój projektu (ponad 1000 linijek kodu zarządzającego wątkami RTOS, chmurą MQTT i WebSerwerem), kod C++ nie jest już wklejany jako statyczny blok tekstu w tej dokumentacji.
+
+* **Główny kod sterownika:** Znajduje się w pliku [`src/main.cpp`](../src/main.cpp).
+* **System WebUI (Strona WWW):** Zlokalizowany w zoptymalizowanym pliku nagłówkowym w [`include/strona_www.h`](../include/strona_www.h).
+
+Architektura i zasada działania asynchronicznej pętli opisana jest w dokumencie `Baza_Wiedzy_O_Kodzie.md`.
