@@ -65,12 +65,11 @@ Przekazanie sygnałów cyfrowych I2C poza barierę galwaniczną.
    * Pinu `SCL` na module DAC GP8403.
 
 ### KROK 5: Połączenie Sygnałów z Maszyną
-
+![Moduł DAC](https://github.com/KamilBol/Regulator-PID-VSC/blob/main/Docs/WiKiModule/Picture/Dac_x2%20I2C_CH10V%20.jpg?raw=true)
 **A. Analiza prądu na starym zadajniku (Wejście do ADS1115)**
 * Moduł ten nie jest w stanie przyjąć napięcia wyższego niż jego nowe napięcie zasilania (czyli 5V). Jeżeli oryginalny zadajnik maszyny operuje zakresem 0-10V, **bezwzględnie wymagany jest sprzętowy dzielnik napięcia** (np. użycie dwóch rezystorów 10 kOhm dla redukcji sygnału o połowę).
 * Minus (GND) z systemu starego zadajnika łączysz fizycznie z Nową Masą (Pin 3 kostki B0505S-1W).
 * Zredukowany sygnał wejściowy (+) lutujesz do pinu `A0` na przetworniku ADS1115. Piny `A1`, `A2`, `A3` oraz `ALRT` muszą pozostać niezawarte z niczym innym.
-![](https://github.com/KamilBol/Regulator-PID-VSC/blob/main/Docs/WiKiModule/Picture/Dac_x2%20I2C_CH10V%20.jpg?raw=true)
 **B. Wysyłanie Wysterowania do Falownika (Wyjście z DAC -> Izolator GLK DIN)**
 * Ostatnim etapem jest wysterowanie systemu. Czysty, analogowy sygnał 0-10V wychodzący z modułu **DAC GP8403** poprowadź kablami do wejść (`Input 0-10V`) Twojego nowego izolatora GLK montowanego na szynie DIN.
 * Dopiero z wyjść izolatora GLK (`Output`) ciągniesz grube, instalacyjne kable sterownicze prosto do listwy terminali wejściowych głównego falownika. Układ jest w pełni zabezpieczony i gotowy do pracy w środowisku wysokich prądów.
