@@ -1,0 +1,32 @@
+🛠️ SPECYFIKACJA SPRZĘTOWA (Hardware BOM - Wersja V16.6)
+Poniższa lista przedstawia ostateczny wykaz komponentów elektronicznych i elektrotechnicznych użytych do budowy Regulatora PID Granulatora (Edge Node) oraz urządzeń przemysłowych, z którymi system bezpośrednio współpracuje na hali produkcyjnej. Względem starszych wersji, całkowicie wyeliminowano awaryjną komunikację Modbus RTU na rzecz szybkiego, izolowanego sterowania analogowego.
+
+1. MÓZG SYSTEMU I INTERFEJS UŻYTKOWNIKA (HMI)
+Jednostka Centralna (Mikrokontroler): Płytka Rozwojowa modułu ESP32-S3 WIFI BT, model ESP32-S3-DevKitC-1-N16R8-KIT-A. Układ wyposażony jest w 16 MB pamięci Flash oraz 8 MB pamięci PSRAM. Posiada 44 piny (2x20 pinów w rastrze 2.54 mm) oraz dwa porty USB-C, z czego jeden służy do zasilania i programowania, a drugi do obsługi USB-OTG. * Panel Operatorski (Ekran Dotykowy): Wyświetlacz Nextion NX4832F035 o przekątnej 3.5 cala. Jest to inteligentny moduł HMI TFT LCD z rezystancyjnym ekranem dotykowym. Rozdzielczość ekranu to 480x320 pikseli, a jego fizyczne wymiary to 100,5 x 54,94 mm. Układ korzysta z kodowania znaków iso-8859-2, co zapewnia bezproblemową obsługę polskiego języka.
+
+2. SYSTEMY POMIAROWE (Sensoryka)
+Analizator Parametrów Sieci (Zamiast Modbusa): Moduł PZEM-004T 100A V3.0. Pełni funkcję głównego sprzężenia zwrotnego, czytając rzeczywiste obciążenie silnika na jednej z faz i dostarczając algorytmowi PID dokładnych danych o prądzie (A), napięciu (V) i mocach (W, VA, Var).
+
+Przetwornik Analogowo-Cyfrowy (Zadajnik Ręczny): Moduł 16-bitowego przetwornika ADC, oparty na układzie ADS1115. Zapewnia ultra-precyzyjny odczyt napięcia z zewnętrznego potencjometru operatora.
+
+Czujnik Klimatyczny: Dedykowany moduł DHT11 monitorujący na bieżąco temperaturę oraz wilgotność wewnątrz szafy sterowniczej (zabezpieczenie przed przegrzaniem układów ESP32).
+
+3. MODUŁY WYKONAWCZE I ZABEZPIECZENIA (Izolowana Strefa Brudna)
+Generator Sygnału Sterującego (Przetwornik DAC): Moduł DFRobot Gravity I2C. Służy jako moduł wyjściowy na falownik ślimaków. Generuje precyzyjne napięcie (lub prąd w standardzie 4-20mA), sterujące prędkością obrotową falowników.
+
+Izolator Galwaniczny Magistrali Danych: Tarcza ochronna na sygnał I2C oparta na dwukierunkowym izolatorze ISO1540. Separuje delikatną logikę ESP32 (3.3V) od szumów i zakłóceń elektromagnetycznych generowanych przez inwertery silnikowe.
+
+Izolator Zasilania: Tarcza ochronna na zasilanie, model B0505S-1W. Separuje masę (GND) i obwód 5V układów wykonawczych od zasilania procesora.
+
+Opcjonalny Konwerter Pętli Prądowej: Moduł konwertera sygnału napięciowego (0-5V) na sygnał prądowy (4-20mA) - tzw. zielona płytka. Stosowany opcjonalnie w przypadku falowników wymagających twardego sterowania pętlą prądową.
+
+Moduły Przekaźnikowe: Standardowe przekaźniki cyfrowe (Logika Low-Trigger) odpowiedzialne za sprzętowe i awaryjne zatrzymywanie/uruchamianie falowników.
+
+Rejestrator Danych: Moduł czytnika kart MicroSD komunikujący się po szybkiej magistrali SPI. Zapisuje zrzuty pamięci i logi telemetryczne (Datalogger).
+
+4. WSPÓŁPRACUJĄCE MASZYNY PRZEMYSŁOWE NA HALI
+System Regulatora PID został zaprojektowany i zestrojony do bezpośredniej współpracy z następującymi jednostkami napędowymi:
+
+Napęd Główny Granulatora: Softstarter marki EMOTRON, typ TSA52-056 23NNN-AA-. Znamionowy prąd silnika (Motor Current) wynosi 56A. Z tego obwodu system (za pośrednictwem cewki PZEM) zbiera kluczowe informacje. Założenie regulacyjne: po zsumowaniu obciążenia, gdy prąd przekracza granicę (np. 38.0A), maszyna automatycznie spowalnia podajniki ślimakowe nadawy. * Napęd Ślimaków Nadawy (Sterowany z PID): Falownik Invertek Optidrive E3, model ODE-3-240095-3F42. Otrzymuje sygnał analogowy z naszego przetwornika DAC, bezpośrednio regulując płynność i agresywność podawania materiału.
+
+Napędy Pomocnicze (Boczne): Falowniki Invertek Optidrive E3, modele ODE-3-140022-3F12 oraz ODE-3-140041-3F12.
