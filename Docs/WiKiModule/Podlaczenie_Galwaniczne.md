@@ -74,10 +74,10 @@ Przekazanie sygnałów cyfrowych I2C poza barierę galwaniczną.
 * Ostatnim etapem jest wysterowanie systemu. Czysty, analogowy sygnał 0-10V wychodzący z modułu **DAC GP8403** poprowadź kablami do wejść (`Input 0-10V`) Twojego nowego izolatora GLK montowanego na szynie DIN.
 * Dopiero z wyjść izolatora GLK (`Output`) ciągniesz grube, instalacyjne kable sterownicze prosto do listwy terminali wejściowych głównego falownika. Układ jest w pełni zabezpieczony i gotowy do pracy w środowisku wysokich prądów.
 
-* 
+* Sterowanie 0-10V
 ![](https://github.com/KamilBol/Regulator-PID-VSC/blob/main/Docs/WiKiModule/Picture/Schemat%20Strefy%20Brudnej.png?raw=true)
 
 
 
-
+* Sterowanie 0-20mA & 4-20mA
 ![](https://github.com/KamilBol/Regulator-PID-VSC/blob/main/Docs/WiKiModule/Picture/Schemat%20Strefy%20Brudnej%20+%20GLK%200-20mA.png?raw=true)
