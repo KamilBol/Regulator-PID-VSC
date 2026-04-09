@@ -363,7 +363,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     
     <div class="card">
         <h3 style="margin-top:0; color:var(--pink);">5. Fizyczne Limity Napięcia</h3>
-        <p class="help-text">Ograniczenie twarde napięcia na wyjściu DAC. Gwarantuje, że sterownik nie poda na falownik sygnału poza tym zakresem.</p>
+        <p class="help-text">Ograniczenie twarde napięcia na wyjściu DAC. Gwarantuje, że sterownik nie poda na falownik sygnału poza tym zakresem GDY.</p>
         <form onsubmit="saveVoltLimits(event)">
             <label>Podłoga (Min V)</label><input type="number" step="0.01" id="minV" required>
             <label>Sufit (Max V)</label><input type="number" step="0.01" id="maxV" required>

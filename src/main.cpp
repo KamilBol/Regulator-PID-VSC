@@ -162,6 +162,11 @@ unsigned long lastNextionResponseTime = 0;
 float pzem_u = 0, pzem_p = 0, pzem_pf = 0, pzem_s = 0, pzem_q = 0;
 float dht_t = 0, dht_h = 0;
 
+// Konfiguracja wejścia sprzętowego:
+// 0 = Odczyt napięcia (0-10V) z pinu A0 (Dzielnik 10k)
+// 1 = Odczyt prądu (mA) z pinu A1 (Rezystor 250 Ohm)
+int typZadajnika = 0;
+
 // =====================================================================================
 // DEKLARACJE WYPRZEDZAJĄCE (Zabezpieczenie kompilatora przed brakiem referencji)
 // =====================================================================================
@@ -852,6 +857,19 @@ void handleRestart() {
     delay(500); 
     ESP.restart(); 
 }
+// =====================================================================================
+// KROK 3: ZAPIS W PAMIĘCI I OBSŁUGA ZMIANY Z POZIOMU WWW
+// =====================================================================================
+
+void handleSetTypZad() { 
+    if (!checkAuth()) return; 
+    if (server.hasArg("t")) { 
+        typZadajnika = server.arg("t").toInt(); 
+        memory.putInt("typZad", typZadajnika); 
+        triggerBlink(1, 1000); 
+    } 
+    server.send(200, "text/plain", "OK"); 
+}
 
 void handleSaveDefaults() { 
     if (!checkAuth()) return; 
@@ -867,6 +885,10 @@ void handleSaveDefaults() {
     memory.putFloat("d_minV", minDacVolt); 
     memory.putFloat("d_maxV", maxDacVolt); 
     memory.putInt("d_outM", outMode); 
+    
+    // Zapisujemy domyślny typ zadajnika do pamięci trwałej
+    memory.putInt("d_typZ", typZadajnika); 
+    
     server.send(200, "text/plain", "OK"); 
 }
 
@@ -885,6 +907,9 @@ void handleRestoreDefaults() {
     maxDacVolt = memory.getFloat("d_maxV", 10.0); 
     outMode = memory.getInt("d_outM", 0); 
     
+    // Wczytujemy zresetowany typ zadajnika
+    typZadajnika = memory.getInt("d_typZ", 0); 
+    
     memory.putFloat("minLim", minLimit); 
     memory.putFloat("maxLim", maxLimit); 
     memory.putFloat("kp", Kp); 
@@ -897,6 +922,9 @@ void handleRestoreDefaults() {
     memory.putFloat("minDacVolt", minDacVolt); 
     memory.putFloat("maxDacVolt", maxDacVolt); 
     memory.putInt("outMode", outMode); 
+    
+    // Twardy zapis odzyskanego typu zadajnika do działającej pamięci
+    memory.putInt("typZad", typZadajnika); 
     
     memory.putString("ssid", ""); 
     memory.putString("pass", ""); 
@@ -970,21 +998,18 @@ void setupWiFi() {
         memory.putInt("apState", 1); 
     }
     
-    // --- INTELIGENTNE NAZWY SIECI (Unikamy pogryzienia się maszyn) ---
     if (apState == 1) { 
         IPAddress local_ip(192, 168, 5, 1); 
         IPAddress gateway(192, 168, 5, 1); 
         IPAddress subnet(255, 255, 255, 0); 
         WiFi.softAPConfig(local_ip, gateway, subnet); 
         
-        // Dynamiczna sieć, np. "Regulator_Granulator_01"
         String apName = "Regulator_" + mqtt_id;
         WiFi.softAP(apName.c_str()); 
     }
     
-    // Dynamiczna domena lokalna, np. http://granulator_01.local
     String mdnsName = mqtt_id;
-    mdnsName.toLowerCase(); // mDNS woli małe litery
+    mdnsName.toLowerCase(); 
     MDNS.begin(mdnsName.c_str());
     
     server.on("/", HTTP_GET, []() { 
@@ -1011,6 +1036,10 @@ void setupWiFi() {
     server.on("/api/restart", HTTP_POST, handleRestart); 
     server.on("/api/save_defaults", HTTP_POST, handleSaveDefaults); 
     server.on("/api/restore_defaults", HTTP_POST, handleRestoreDefaults);
+    
+    // Nowy endpoint do obsługi wyboru Zadajnika z poziomu HTML
+    server.on("/api/set_typzad", HTTP_POST, handleSetTypZad);
+    
     server.on("/api/sd_list", HTTP_GET, handleSDList); 
     server.on("/sd_read", HTTP_GET, handleSDRead);
     
@@ -1037,7 +1066,7 @@ void setupWiFi() {
             }
         } 
     });
-    
+  
     server.begin(); 
     isWifiAPActive = true; 
     triggerBlink(3, 100); 
@@ -1266,6 +1295,10 @@ void setup() {
     
     outMode = memory.getInt("outMode", 0);
     
+    // --- INTELIGENTNY MODUŁ: Wczytanie typu zadajnika na obiekcie ---
+    typZadajnika = memory.getInt("typZad", 0); // 0=Volty(A0), 1=Ampery(A1)
+    // -----------------------------------------------------------------
+    
     minDacVolt = memory.getFloat("minDacVolt", 3.5); 
     if (isnan(minDacVolt) || minDacVolt < 0.0) minDacVolt = 0.0; 
     if (minDacVolt > 10.0) minDacVolt = 10.0;
@@ -1355,7 +1388,6 @@ void loop() {
     
     handleNextionInput(); 
 
-    // Procedura weryfikująca czas przytrzymania ekranowego guzika (Hard Reset)
     if (isResetPressed) {
         unsigned long holdTime = millis() - resetPressTime;
         if (holdTime > 1000 && !resetStage1) { 
@@ -1388,7 +1420,6 @@ void loop() {
         }
     }
 
-    // Obsługa fizycznego przycisku awaryjnego (uruchamiającego Tryb Testowy)
     int buttonState = digitalRead(BUTTON_PIN);
     if (buttonState == LOW && !buttonWasPressed) { 
         buttonPressTime = millis(); 
@@ -1415,7 +1446,6 @@ void loop() {
         clickCount = 0; 
     }
 
-    // Pętla Diagnostyczna - co 2 sekundy sprawdza obecność podzespołów peryferyjnych
     if (millis() - lastDiagnosticTime >= 2000) {
         lastDiagnosticTime = millis();
         Wire.beginTransmission(0x58); 
@@ -1428,20 +1458,26 @@ void loop() {
         float diag_u = pzem.voltage(); 
         statusPZEM = !isnan(diag_u);
         
-        // Cykliczne żądanie do Nextiona, by zgłosił swoją obecność po łączu Serial
         NextionSerial.print("sendme"); 
         NextionSerial.write(0xFF); 
         NextionSerial.write(0xFF); 
         NextionSerial.write(0xFF);
     }
 
-    // Pętla Sterująca 50ms - Zbieranie nastaw z potencjometru ADC i nadawanie na Falowniki
+    // ====================================================================
+    // KROK 4: PĘTLA STERUJĄCA - INTELIGENTNY ODCZYT ADC
+    // ====================================================================
     if (millis() - lastFastUpdate >= 50) {
         lastFastUpdate = millis(); 
         int16_t adc_surowe = 0; 
         
         if (statusADS) {
-            adc_surowe = ads.readADC_SingleEnded(0); 
+            // Abstrakcja sprzętowa - wybór wejścia na podstawie ustawień
+            if (typZadajnika == 0) {
+                adc_surowe = ads.readADC_SingleEnded(0); // Pin A0 (Dzielnik napięcia 0-10V)
+            } else {
+                adc_surowe = ads.readADC_SingleEnded(1); // Pin A1 (Rezystor prądowy mA)
+            }
         }
         
         float napiecie_na_pinie = ads.computeVolts(adc_surowe); 
@@ -1487,14 +1523,12 @@ void loop() {
         }
     }
 
-    // Pętla Obliczeniowa 200ms - Algorytm Zamkniętej Pętli PID i Ochrona Silnika
     if (millis() - lastPIDTime >= 200) {
         lastPIDTime = millis(); 
         float i = pzem.current(); 
         
         if (isnan(i)) i = 0.0;
         
-        // Zastąpienie rzeczywistego prądu sztucznym do testowania algorytmu "na sucho"
         if (trybTestowy) { 
             int pot_raw = analogRead(PIN_POT_SYMULACJA); 
             i = (pot_raw / 4095.0) * 50.0; 
@@ -1506,20 +1540,17 @@ void loop() {
             current_Amps = (i * 0.4) + (current_Amps * 0.6); 
         }
         
-        // Ewaluacja Przeciążenia - System Protection
         if (systemON && current_Amps >= (maxLimit + overloadLimit)) { 
             stopRegulator(); 
             trippedByOverload = true; 
         }
         
-        // Automatyczne wznowienie po opadnięciu uderzenia amperowego
         if (!systemON && trippedByOverload && modeAUTO) { 
             if (current_Amps <= (minLimit + recoveryLimit)) {
                 startRegulator(); 
             }
         }
         
-        // Realizacja wzoru dla biblioteki PID_v1
         if (systemON) { 
             Setpoint = maxLimit - 1.0; 
             Input = current_Amps; 
@@ -1527,7 +1558,6 @@ void loop() {
         }
     }
 
-    // Pętla Interfejsu 1000ms - Wyświetlanie danych na ekranach
     if (millis() - lastUpdate >= 1000) {
         lastUpdate = millis(); 
         pzem_u = pzem.voltage(); 
