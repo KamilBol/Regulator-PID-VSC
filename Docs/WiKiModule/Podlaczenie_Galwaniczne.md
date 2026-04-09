@@ -5,7 +5,7 @@ Niniejszy dokument opisuje kluczowy element bezpieczeństwa systemu – sprzęto
 ## 1. Wyjaśnienie elementów: Co to jest i do czego służy?
 
 ### B0505S-1W (Przetwornica izolująca napięcie DC-DC)
-!https://github.com/KamilBol/Regulator-PID-VSC/blob/main/Docs/WiKiModule/Picture/ADS1115%20(Przetwornik%20ADC)%20.jpg?raw=true
+!(https://github.com/KamilBol/Regulator-PID-VSC/blob/main/Docs/WiKiModule/Picture/ADS1115%20(Przetwornik%20ADC)%20.jpg?raw=true)
 * **Co to jest:** To miniaturowy zasilacz z wbudowanym mikro-transformatorem.
 * **Co robi:** Pobiera prąd z czystej strefy zasilania procesora i generuje nowe, całkowicie "odcięte" zasilanie 5V. Stanowi barierę galwaniczną. Jeśli na linii z maszyną dojdzie do potężnego zwarcia lub przepięcia (np. 400V), energia spali ten moduł, ale fizycznie nie ma prawa cofnąć się i zniszczyć sterownika ESP32.
 * **Piny (od strony napisów):**
