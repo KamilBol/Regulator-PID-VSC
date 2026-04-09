@@ -1,0 +1,32 @@
+# 🧠 Innowacyjny Bypass Analogowy i System "Bumpless Transfer"
+
+Jednym z największych wyzwań przy modernizacji pracujących linii przemysłowych jest integracja nowych systemów IoT bez zaburzania dotychczasowych przyzwyczajeń operatorów. Maszyna granulująca posiadała oryginalny, sprzętowy potencjometr (zadajnik na hali), którym operator ręcznie sterował prędkością ślimaków. 
+
+[cite_start]Zamiast całkowicie usuwać ten element i zmuszać operatora do korzystania wyłącznie z ekranu dotykowego, zaprojektowałem **transparentny system przełączający (Bypass) z funkcją płynnego przejścia (Bumpless Transfer)**. 
+
+
+
+## 1. Architektura Sprzętowa (Fizyczne przełączanie sygnału)
+Zastosowałem przekaźniki ze stykami przełącznymi (SPDT). [cite_start]Domyślnie (w stanie beznapięciowym / wyłączonym), styk przekaźnika łączy oryginalny zadajnik z hali bezpośrednio z wejściem falownika. 
+
+* **Stan OFF (Tryb Manualny / Ręczny):** Przekaźnik jest zwolniony. Sygnał analogowy omija mikrokontroler. Operator kręci potencjometrem na szafie, a maszyna reaguje natychmiast. System ESP32 pracuje w tle jako bierny obserwator.
+* **Stan ON (Tryb Automatyczny PID):** Mikrokontroler załącza cewkę przekaźnika. Styk fizycznie odcina oryginalny potencjometr i podłącza w jego miejsce wyjście z przetwornika DAC (0-10V) sterowanego przez algorytm PID.
+
+## 2. Magia Programowa: "Bumpless Transfer" (Bezszarpnięciowy Start)
+Fizyczne przełączenie styków rodzi jednak potężny problem: co, jeśli potencjometr na hali ustawiony jest na 7.0V, a wyjście DAC mikrokontrolera na 0.0V? W momencie kliknięcia przekaźnika falownik dostałby nagły sygnał hamowania, co spowodowałoby gwałtowne szarpnięcie potężnymi silnikami, prądy udarowe i potencjalne zerwanie sprzęgła.
+
+**Moje autorskie rozwiązanie problemu:**
+[cite_start]Nawet gdy system PID jest wyłączony, układ nieustannie odczytuje napięcie z oryginalnego zadajnika operatora za pomocą precyzyjnego przetwornika ADC (ADS1115). [cite_start]W tym samym ułamku sekundy, program nadpisuje wyjście własnego przetwornika DAC dokładnie tą samą wartością (np. zczytuje 7.0V i wystawia 7.0V)[cite: 51].
+
+[cite_start]Dzięki temu wirtualnemu "naśladowaniu", gdy operator wciska przycisk **START PID**, przekaźnik przełącza obwód, ale napięcie na wejściu falownika nie zmienia się nawet o ułamek wolta. [cite_start]Przejście sterowania jest idealnie gładkie i niewidoczne dla maszyny[cite: 32]. Dopiero po ułamku sekundy algorytm PID przejmuje pałeczkę i zaczyna delikatnie korygować napięcie w górę lub w dół.
+
+## 3. Aktywne Zabezpieczenie Nadprądowe (Zrzut Awaryjny)
+Ten system przełączania to nie tylko wygoda, ale przede wszystkim sprzętowe zabezpieczenie chroniące silnik granulatora.
+
+* **Detekcja:** Moduł PZEM-004T nieustannie monitoruje prąd główny maszyny.
+* [cite_start]**Przekroczenie (Trip):** Jeśli nastąpi nagłe zakleszczenie materiału, a prąd przekroczy limit bezpieczeństwa (`Limit Max + Próg Odcięcia Awaryjnego`), system natychmiast wywołuje funkcję awaryjną[cite: 306, 308].
+* [cite_start]**Oddanie kontroli:** Mikrokontroler bezzwłocznie odcina zasilanie przekaźników[cite: 308]. [cite_start]Styk opada, a fizyczna kontrola nad maszyną natychmiast wraca do ręcznego potencjometru operatora na hali. 
+* **Wznowienie:** Jeśli włączony jest tryb `AUTO`, system cierpliwie czeka. [cite_start]Gdy prąd (obciążenie maszyny) spadnie poniżej `Limitu Wznowienia`, mikrokontroler ponownie wyrównuje napięcia (Bumpless Transfer) i samoczynnie wznawia proces automatycznej regulacji PID[cite: 315, 316, 317].
+
+**Podsumowanie inżynieryjne:**
+System charakteryzuje się architekturą *Fail-Safe*. W przypadku zawieszenia się mikrokontrolera, utraty zasilania na płycie sterującej czy krytycznego przeciążenia prądowego, fizyczne przekaźniki zawsze opadają, oddając 100% bezpiecznej, analogowej kontroli w ręce człowieka stojącego przy maszynie.
