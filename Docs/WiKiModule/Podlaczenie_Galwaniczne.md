@@ -5,7 +5,7 @@ Niniejszy dokument opisuje kluczowy element bezpieczeństwa systemu – sprzęto
 ## 1. Wyjaśnienie elementów: Co to jest i do czego służy?
 
 ### B0505S-1W (Przetwornica izolująca napięcie DC-DC)
-![](https://github.com/KamilBol/Regulator-PID-VSC/blob/main/Docs/WiKiModule/Picture/ADS1115%20(Przetwornik%20ADC)%20.jpg?raw=true)
+![](https://github.com/KamilBol/Regulator-PID-VSC/blob/main/Docs/WiKiModule/Picture/B0505S-1W%20(Przetwornica%20izoluj%C4%85ca%20napi%C4%99cie).jpg?raw=true)
 * **Co to jest:** To miniaturowy zasilacz z wbudowanym mikro-transformatorem.
 * **Co robi:** Pobiera prąd z czystej strefy zasilania procesora i generuje nowe, całkowicie "odcięte" zasilanie 5V. Stanowi barierę galwaniczną. Jeśli na linii z maszyną dojdzie do potężnego zwarcia lub przepięcia (np. 400V), energia spali ten moduł, ale fizycznie nie ma prawa cofnąć się i zniszczyć sterownika ESP32.
 * **Piny (od strony napisów):**
@@ -15,10 +15,12 @@ Niniejszy dokument opisuje kluczowy element bezpieczeństwa systemu – sprzęto
   * **Pin 4 (+Vo / +Vout):** NOWE, izolowane 5V do zasilania brudnej strefy sygnałowej.
 
 ### ADS1115 (Precyzyjny Przetwornik ADC 16-bit)
+![](https://github.com/KamilBol/Regulator-PID-VSC/blob/main/Docs/WiKiModule/Picture/ADS1115%20(Przetwornik%20ADC)%20.jpg?raw=true)
 * **Co to jest:** Cyfrowy miernik napięcia komunikujący się z układem poprzez szynę I2C.
 * **Co robi:** Zastąpił problematyczny protokół Modbus w obszarze bezpieczeństwa. Pozwala sterownikowi na "podsłuchanie" napięcia na zadajniku ręcznym operatora maszyny. Dzięki niemu system jest w stanie wyrównać swoje parametry wyjściowe i wykonać tzw. *Bumpless Transfer* (bezuderzeniowe przejęcie kontroli) bez zatrzymywania maszyny.
 
 ### Przemysłowy Izolator/Rozdzielacz Sygnału (Moduł GLK DIN-Rail)
+![](https://github.com/KamilBol/Regulator-PID-VSC/blob/main/Docs/WiKiModule/Picture/Izolator%20sygna%C5%82u%20analogowego%200-10V%20%200-20mA.png?raw=true)
 * **Co to jest:** Profesjonalny układ automatyki przemysłowej do kondycjonowania i konwersji sygnałów analogowych, montowany w szafie sterowniczej na uniwersalnej szynie DIN.
 * **Co robi (Zastępuje "Zieloną Płytkę"):** Moduł ten przyjmuje wyliczone, sterujące napięcie (0-10V) wygenerowane przez nasz wewnętrzny układ DAC (GP8403) i sprzętowo "tłumaczy" je na sygnał przemysłowy, który akceptuje falownik (np. pętlę prądową 0-20mA lub separowane napięcie). Moduł wprowadza własną barierę galwaniczną między wejściem a wyjściem, likwidując "pętle masy" i czyniąc komunikację z napędami całkowicie wolną od szumów oraz zakłóceń elektromagnetycznych.
 
@@ -36,7 +38,7 @@ Stół roboczy / płytkę dzielimy na dwie odrębne przestrzenie miedziane:
 2. Wlutuj Masę (GND) z tego samego zasilacza do pinu 1 (`-Vin`) na B0505S-1W.
 3. Poprowadź przewód z pinu 3.3V na ESP32 do pinu `VCC1` na izolatorze magistrali I2C (ISO1540). *(To konieczne, bo logika ESP działa na napięciu 3.3V, a nie 5V)*.
 4. Poprowadź przewód z pinu GND na ESP32 do pinu `GND1` na izolatorze ISO1540.
-
+![](https://github.com/KamilBol/Regulator-PID-VSC/blob/main/Docs/WiKiModule/Picture/Dwukierunkowy%20izolator%20I2C%20ISO1540.jpg?raw=true)
 ### KROK 2: Komunikacja od strony ESP32 do izolatora (Strefa Czysta)
 1. Z pinu 1 (SDA) na ESP32 poprowadź kabel do pinu `SDA1` na izolatorze ISO1540.
 2. Z pinu 2 (SCL) na ESP32 poprowadź kabel do pinu `SCL1` na izolatorze ISO1540.
@@ -68,7 +70,7 @@ Przekazanie sygnałów cyfrowych I2C poza barierę galwaniczną.
 * Moduł ten nie jest w stanie przyjąć napięcia wyższego niż jego nowe napięcie zasilania (czyli 5V). Jeżeli oryginalny zadajnik maszyny operuje zakresem 0-10V, **bezwzględnie wymagany jest sprzętowy dzielnik napięcia** (np. użycie dwóch rezystorów 10 kOhm dla redukcji sygnału o połowę).
 * Minus (GND) z systemu starego zadajnika łączysz fizycznie z Nową Masą (Pin 3 kostki B0505S-1W).
 * Zredukowany sygnał wejściowy (+) lutujesz do pinu `A0` na przetworniku ADS1115. Piny `A1`, `A2`, `A3` oraz `ALRT` muszą pozostać niezawarte z niczym innym.
-
+![](https://github.com/KamilBol/Regulator-PID-VSC/blob/main/Docs/WiKiModule/Picture/Dac_x2%20I2C_CH10V%20.jpg?raw=true)
 **B. Wysyłanie Wysterowania do Falownika (Wyjście z DAC -> Izolator GLK DIN)**
 * Ostatnim etapem jest wysterowanie systemu. Czysty, analogowy sygnał 0-10V wychodzący z modułu **DAC GP8403** poprowadź kablami do wejść (`Input 0-10V`) Twojego nowego izolatora GLK montowanego na szynie DIN.
 * Dopiero z wyjść izolatora GLK (`Output`) ciągniesz grube, instalacyjne kable sterownicze prosto do listwy terminali wejściowych głównego falownika. Układ jest w pełni zabezpieczony i gotowy do pracy w środowisku wysokich prądów.
