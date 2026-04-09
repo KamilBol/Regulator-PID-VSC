@@ -1,0 +1,30 @@
+# 🧠 Innowacyjny Bypass Analogowy i System "Bumpless Transfer"
+
+Jednym z największych wyzwań przy modernizacji pracujących linii przemysłowych jest integracja nowych sterowników (IoT) bez niszczenia oryginalnych, sprawdzonych zabezpieczeń fabrycznych maszyny. 
+
+Zamiast całkowicie wycinać starą automatykę, zaprojektowałem **transparentny system przełączający (Bypass) z funkcją płynnego przejścia (Bumpless Transfer)**. System ten pozwala na bezinwazyjne wpięcie się w obwód i w razie awarii natychmiastowo oddaje kontrolę oryginalnemu sterownikowi maszyny.
+
+## 1. Architektura Sprzętowa (Fizyczne przełączanie sygnału)
+Sercem układu przełączającego są przekaźniki ze stykami przełącznymi (SPDT). Wykorzystałem mechaniczną naturę styków Normalnie Zamkniętych (NC) i Normalnie Otwartych (NO), aby zrealizować sprzętowe zabezpieczenie *Fail-Safe*.
+
+* **STAN OFF (Zwolniony): Praca na Starym Układzie**
+  Kiedy mój system PID jest wyłączony (lub w przypadku utraty zasilania procesora), przekaźnik spoczywa na styku **Normalnie Zamkniętym (NC)**. W tym trybie sygnał sterujący płynie bezpośrednio z oryginalnego regulatora maszyny do falowników podajników. 
+  *Logika starego układu:* Jeśli pobór prądu osiągnie próg 38.0A, stary regulator natychmiast zrzuca prędkość podajników z maksymalnych 50 Hz do 17 Hz (czyli do ok. 34% prędkości maksymalnej). W tym czasie mój nowy układ ESP32 pracuje w tle wyłącznie jako bierny obserwator (datalogger).
+
+* **STAN ON (Załączony): Praca na Nowym Regulatorze PID**
+  Gdy operator załącza tryb automatyczny, ESP32 podaje napięcie na cewkę przekaźnika. Obwód przełącza się na styk **Normalnie Otwarty (NO)**. Oryginalny regulator zostaje fizycznie odcięty od falowników, a pełną kontrolę przejmuje mój system PID, podając płynnie wyliczany sygnał (0-10V) z precyzyjnego przetwornika DAC.
+
+## 2. Magia Programowa: "Bumpless Transfer" (Bezszarpnięciowe Przejście)
+Fizyczne przełączenie styków rodzi potężny problem technologiczny: w momencie "pstryknięcia" przekaźnika stary regulator mógł podawać np. sygnał dla 25 Hz, a mój DAC domyślnie startowałby od 0 Hz. Spowodowałoby to nagłe, niszczycielskie uderzenie momentu obrotowego i potężny prąd udarowy, mogący zerwać sprzęgła silników.
+
+**Moje autorskie rozwiązanie tego problemu:**
+Kiedy przekaźnik jest w stanie spoczynku (NC), mój mikrokontroler nie tylko "odpoczywa", ale za pomocą przetwornika analogowo-cyfrowego (ADC) nieustannie podsłuchuje napięcie, jakie stary regulator podaje na falowniki. Jednocześnie na bieżąco, w tle, ustawia na swoim własnym wyjściu DAC dokładnie taką samą wartość napięcia.
+
+Dzięki temu wirtualnemu "kopiowaniu", gdy operator wciska przycisk **START PID**, styk w ułamku sekundy przeskakuje z NC na NO, ale napięcie sterujące na wejściu falownika nie zmienia się nawet o milivolt! Przejście jest absolutnie niewidoczne dla mechaniki maszyny (Bumpless Transfer). Dopiero po chwili algorytm PID powoli i płynnie zaczyna korygować prędkość ślimaków według zadanych na ekranie parametrów.
+
+## 3. Aktywne Zabezpieczenie Nadprądowe (Zrzut Awaryjny)
+Zbudowany układ gwarantuje pełne bezpieczeństwo parku maszynowego. 
+
+* **Monitorowanie i Odcięcie:** System przez cały czas czyta rzeczywisty prąd z licznika PZEM-004T. Jeżeli dojdzie do zacięcia materiału, a algorytm PID nie zdąży skorygować prędkości przed przekroczeniem limitów awaryjnych, mikrokontroler natychmiast zwalnia cewki przekaźników.
+* **Twardy Powrót:** Styki przekaźnika natychmiast spadają z powrotem na domyślną pozycję **NC**, błyskawicznie oddając stery staremum fabrycznemu regulatorowi maszyny. Stary system natychmiast podejmuje akcję (np. rzuca obroty na 17 Hz, chroniąc silnik główny przy 38A).
+* **Automatyczne Wznowienie:** Jeśli włączony jest tryb `AUTO`, system cierpliwie czeka. Gdy prąd opadnie do bezpiecznego, zdefiniowanego progu wznowienia, ESP32 ponownie podsłucha napięcie układu starego, wyrówna swoje wyjście i płynnie odzyska kontrolę nad falownikiem.
