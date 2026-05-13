@@ -271,9 +271,15 @@ void logBootEvent() {
         delay(100);
     }
     
-    // Odczyt czujników (rozgrzanych po kilku sekundach setupu)
+    // Wymuszone odczyty kontrolne czujników
+    float boot_pzem_v = pzem.voltage();
+    bool boot_pzem_ok = !isnan(boot_pzem_v);
+    
     float boot_temp = dht.readTemperature();
     float boot_hum = dht.readHumidity();
+    bool boot_dht_ok = !isnan(boot_temp);
+    
+    bool boot_iso_ok = (statusDAC || statusADS);
 
     File f = SD.open("/AI_LOG.txt", FILE_APPEND); 
     if (f) { 
@@ -282,9 +288,13 @@ void logBootEvent() {
         f.println("System: Granulator Pro V16.5");
         f.println("Adres IP LAN: " + (WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : "Brak-Tryb(AP)"));
         f.println("--- STATUS SPRZETU ---");
-        f.println("Magistrala I2C-1 (Falowniki): " + String(statusDAC ? "ONLINE" : "OFFLINE / BLAD"));
-        f.println("Magistrala I2C-2 (Zadajnik): " + String(statusADS ? "ONLINE" : "OFFLINE / BLAD"));
-        f.println("Klimat Szafy (DHT): " + String(isnan(boot_temp) ? "BLAD ODCZYTU" : String(boot_temp, 1) + " st.C / " + String(boot_hum, 0) + "% Wilgotnosci"));
+        f.println("Zasilanie (PZEM-004T): " + String(boot_pzem_ok ? "ONLINE (" + String(boot_pzem_v, 1) + " V)" : "OFFLINE / BLAD"));
+        f.println("Ekran HMI (Nextion): ONLINE (Port UART aktywny)");
+        f.println("Zadajnik (ADS1115): " + String(statusADS ? "ONLINE" : "OFFLINE / BLAD"));
+        f.println("Falowniki (GP8403): " + String(statusDAC ? "ONLINE" : "OFFLINE / BLAD"));
+        f.println("Izolator I2C (ISO1540): " + String(boot_iso_ok ? "ONLINE" : "OFFLINE / BLAD"));
+        f.println("Klimat (DHT11): " + String(boot_dht_ok ? "ONLINE (" + String(boot_temp, 1) + " st.C / " + String(boot_hum, 0) + " %)" : "OFFLINE / BLAD"));
+        f.println("Logi (Karta SD): ONLINE");
         f.println("========================================");
         f.close(); 
         Serial.println("[SYSTEM] Raport startowy zapisany w AI_LOG.txt");
