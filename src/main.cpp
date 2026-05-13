@@ -246,27 +246,43 @@ String getTimeString(bool forFileName = false) {
     }
     return String(buffer);
 }
-// Inicjalizacja i pełny raport z bootowania maszyny
+// Inicjalizacja samej karty pamieci (sprzetowo)
 void initSD() {
     SPI.begin(PIN_SD_SCK, PIN_SD_MISO, PIN_SD_MOSI, PIN_SD_CS); 
     if (SD.begin(PIN_SD_CS)) { 
         statusSD = true; 
-        File f = SD.open("/AI_LOG.txt", FILE_APPEND); 
-        if (f) { 
-            f.println("\n========================================");
-            f.println("BOOT MASZYNY: " + getTimeString());
-            f.println("System: Granulator Pro V16.5");
-            f.println("Adres IP LAN: " + (WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : "Brak-Tryb(AP)"));
-            f.println("--- STATUS SPRZETU ---");
-            f.println("Magistrala I2C-1 (Falowniki): " + String(statusDAC ? "ONLINE" : "OFFLINE / BLAD"));
-            f.println("Magistrala I2C-2 (Zadajnik): " + String(statusADS ? "ONLINE" : "OFFLINE / BLAD"));
-            f.println("Klimat Szafy (DHT): " + String(isnan(dht_t) ? "BLAD ODCZYTU" : String(dht_t, 1) + " st.C / " + String(dht_h, 0) + "% Wilgotnosci"));
-            f.println("========================================");
-            f.close(); 
-        }
     } else { 
         statusSD = false; 
         myNex.writeStr("sd.txt", "ERR"); 
+    }
+}
+
+// Inteligentny zapis raportu do AI_LOG po odczekaniu na siec i rozgrzaniu czujnikow
+void logBootEvent() {
+    if (!statusSD) return;
+    
+    // Czekamy maksymalnie 5 sekund na pobranie czasu z zegara atomowego (NTP)
+    for(int i = 0; i < 50; i++) {
+        if (getTimeString() != "Brak synchronizacji z siecia") break;
+        delay(100);
+    }
+    
+    // Wymuszony odczyt (Czujnik DHT potrzebuje ok. 2 sekund od wlaczenia pradu)
+    float boot_temp = dht.readTemperature();
+    float boot_hum = dht.readHumidity();
+
+    File f = SD.open("/AI_LOG.txt", FILE_APPEND); 
+    if (f) { 
+        f.println("\n========================================");
+        f.println("BOOT MASZYNY: " + getTimeString());
+        f.println("System: Granulator Pro V16.5");
+        f.println("Adres IP LAN: " + (WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : "Brak-Tryb(AP)"));
+        f.println("--- STATUS SPRZETU ---");
+        f.println("Magistrala I2C-1 (Falowniki): " + String(statusDAC ? "ONLINE" : "OFFLINE / BLAD"));
+        f.println("Magistrala I2C-2 (Zadajnik): " + String(statusADS ? "ONLINE" : "OFFLINE / BLAD"));
+        f.println("Klimat Szafy (DHT): " + String(isnan(boot_temp) ? "BLAD ODCZYTU" : String(boot_temp, 1) + " st.C / " + String(boot_hum, 0) + "% Wilgotnosci"));
+        f.println("========================================");
+        f.close(); 
     }
 }
 
@@ -512,7 +528,6 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
             memory.putFloat("deadBand", deadbandAmps);
             
             // Trik "pod maską" chroniący układ:
-            // Jeśli operator wpisał 0.0, maszyna w tle przeliczy to na bezpieczne 100 ms (0.1s).
             int bezpiecznyCzas = (delayTimeSek <= 0.0) ? 100 : (int)(delayTimeSek * 1000);
             myPID.SetSampleTime(bezpiecznyCzas);
         }
