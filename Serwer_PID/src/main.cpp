@@ -424,26 +424,34 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
                 </div>
                 
                 <div class="card">
-                    <h3 style="margin-top:0;">3. Zaawansowane Strojenie PID (Opóźnienia Transportowe)</h3>
-                    <p class="help-text">Zintegrowane parametry bazowej dynamiki (P, I, D) poszerzone o redukcję efektów grawitacyjnych dla materiałów wolno zsuwających się.</p>
-                    <form onsubmit="cmdPID(event)">
-                        <label>Nastawa P (Kp)</label><input type="number" step="0.01" id="kp" required>
-                        <label>Nastawa I (Ki)</label><input type="number" step="0.01" id="ki" required>
-                        <label>Nastawa D (Kd)</label><input type="number" step="0.01" id="kd" required>
-                        
-                        <hr style="border: 0; border-top: 1px solid #444; margin: 15px 0;">
-                        
-                        <label style="color:var(--accent);">Czas Próbkowania Zwłoki [s]</label>
-                        <p class="help-text" style="margin-top:0;">Zablokuj wyjście PID maszyny na dany czas, czekając na fizyczną reakcję noży tnących granulatora po zmianie prędkości.</p>
-                        <input type="number" step="0.1" min="0.1" max="60.0" id="delayTime" required>
-                        
-                        <label style="color:var(--accent);">Inteligentny Deadband [A]</label>
-                        <p class="help-text" style="margin-top:0;">Odchylenie, w granicach którego PID zamraża ingerencję uznając prąd za "stabilny" i chroniąc falownik przed pulsującym szarpaniem wyjścia.</p>
-                        <input type="number" step="0.1" min="0.0" max="10.0" id="deadBand" required>
-                        
-                        <button type="submit" class="submit-btn" style="background:#555; color:#fff;">WYŚLIJ UST. DYNAMIKI DO MASZYNY</button>
-                    </form>
-                </div>
+            <h3 style="margin-top:0;">3. Zaawansowane Strojenie PID</h3>
+            <p class="help-text">Główne parametry algorytmu (P, I, D) oraz ustawienia zapobiegające "panikowaniu" i szarpaniu maszyny.</p>
+            <form onsubmit="cmdPID(event)">
+                <label style="color:var(--accent);">Współczynnik P (Kp) - "Siła Hamulca"</label>
+                <p class="help-text" style="margin-top:0;">Jak agresywnie system reaguje na rosnący prąd granulatora. Mała wartość: zwalnia delikatnie, ryzyko zapchania. Duża wartość: gwałtownie ucina zasilanie na falowniku, ale może szarpać maszyną.</p>
+                <input type="number" step="0.01" id="kp" required>
+                
+                <label style="color:var(--accent);">Współczynnik I (Ki) - "Cierpliwość / Dociskanie"</label>
+                <p class="help-text" style="margin-top:0;">Jeśli prąd od dłuższego czasu wciąż jest za wysoki, ten parametr z każdą sekundą coraz mocniej "dociska" hamulec aż do skutku. Zbyt duża wartość sprawi, że maszyna "przedobrzy" i udusi obroty na za długo.</p>
+                <input type="number" step="0.01" id="ki" required>
+                
+                <label style="color:var(--accent);">Współczynnik D (Kd) - "Amortyzator"</label>
+                <p class="help-text" style="margin-top:0;">Tłumi zapędy dwóch powyższych parametrów. Pomaga płynnie "wyjść z zakrętu", zapobiegając ciągłemu falowaniu obrotów góra-dół. Przy tym młynie z reguły ustawia się to bardzo blisko zera (np. 0.05).</p>
+                <input type="number" step="0.01" id="kd" required>
+                
+                <hr style="border: 0; border-top: 1px solid #444; margin: 15px 0;">
+                
+                <label style="color:var(--accent);">Czas dojazdu materiału do noży [s]</label>
+                <p class="help-text" style="margin-top:0;">Ile sekund mija, zanim zmiana obrotów podajnika wpłynie na prąd granulatora? Maszyna odczeka ten czas po każdej zmianie, żeby uniknąć przeregulowania. Wpisz "0", aby system reagował natychmiast, bez czekania.</p>
+                <input type="number" step="0.1" min="0.0" max="60.0" id="delayTime" required>
+                
+                <label style="color:var(--accent);">Tolerancja wahań prądu [A]</label>
+                <p class="help-text" style="margin-top:0;">Zapas błędu. Jeśli cel to 38A, a wpiszesz tu 1.0A, to prąd skaczący między 37A a 39A zostanie zignorowany. Zapobiega to ciągłemu szarpaniu falownikiem. Wpisz "0", aby układ reagował na każdy ułamek Ampera.</p>
+                <input type="number" step="0.1" min="0.0" max="10.0" id="deadBand" required>
+
+                <button type="submit" class="submit-btn" style="background:#555; color:#fff;">ZAPISZ USTAWIENIA PID</button>
+            </form>
+        </div>
                 
                 <div class="card">
                     <h3 style="margin-top:0; color:var(--green);">4. Ustawienia Bezpieczeństwa</h3>
