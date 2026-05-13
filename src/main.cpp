@@ -122,6 +122,7 @@ float currentDac2 = 0.0;
 bool isLoggingActive = false;
 unsigned long logEndTime = 0;
 unsigned long lastLogWriteTime = 0;
+String currentLogFileName = "/AI_DIAG.csv"; // Będzie dynamicznie nadpisywane datą
 
 unsigned long lastUpdate = 0; 
 unsigned long lastFastUpdate = 0;
@@ -231,25 +232,40 @@ void handleLED() {
         blinkCount = 0; 
     }
 }
-
-// Inicjalizacja i sprawdzenie karty pamięci SD
+// Funkcja pobierająca aktualny czas z internetu (Zegar Atomowy NTP)
+String getTimeString(bool forFileName = false) {
+    struct tm timeinfo;
+    if (!getLocalTime(&timeinfo, 2000)) { // Czeka max 2 sekundy
+        return forFileName ? "Brak_Czasu" : "Brak synchronizacji z siecia";
+    }
+    char buffer[30];
+    if (forFileName) {
+        strftime(buffer, sizeof(buffer), "%d_%m_%Y_%H_%M", &timeinfo);
+    } else {
+        strftime(buffer, sizeof(buffer), "%d.%m.%Y %H:%M:%S", &timeinfo);
+    }
+    return String(buffer);
+}
+// Inicjalizacja i pełny raport z bootowania maszyny
 void initSD() {
-    // 1. Ustawienie fizycznych pinów dla głównej szyny SPI
     SPI.begin(PIN_SD_SCK, PIN_SD_MISO, PIN_SD_MOSI, PIN_SD_CS); 
-    
-    // 2. KRYTYCZNE: Podajemy obiekt 'SPI' do biblioteki SD i zbijamy prędkość 
-    // do bezpiecznych 4 MHz (4000000), żeby sygnał przeszedł przez kable stykowe
-    if (SD.begin(PIN_SD_CS, SPI, 4000000)) { 
+    if (SD.begin(PIN_SD_CS)) { 
         statusSD = true; 
-        Serial.println("[SD] SUKCES! Karta znaleziona i zamontowana.");
         File f = SD.open("/AI_LOG.txt", FILE_APPEND); 
         if (f) { 
-            f.println("=== START SYSTEMU - V16.5 ==="); 
+            f.println("\n========================================");
+            f.println("BOOT MASZYNY: " + getTimeString());
+            f.println("System: Granulator Pro V16.5");
+            f.println("Adres IP LAN: " + (WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : "Brak-Tryb(AP)"));
+            f.println("--- STATUS SPRZETU ---");
+            f.println("Magistrala I2C-1 (Falowniki): " + String(statusDAC ? "ONLINE" : "OFFLINE / BLAD"));
+            f.println("Magistrala I2C-2 (Zadajnik): " + String(statusADS ? "ONLINE" : "OFFLINE / BLAD"));
+            f.println("Klimat Szafy (DHT): " + String(isnan(dht_t) ? "BLAD ODCZYTU" : String(dht_t, 1) + " st.C / " + String(dht_h, 0) + "% Wilgotnosci"));
+            f.println("========================================");
             f.close(); 
         }
     } else { 
         statusSD = false; 
-        Serial.println("[SD] BŁĄD! Moduł SD milczy.");
         myNex.writeStr("sd.txt", "ERR"); 
     }
 }
@@ -905,9 +921,13 @@ void handleStartLog() {
             isLoggingActive = true;
             logEndTime = millis() + (mins * 60000UL);
             
-            File f = SD.open("/AI_DIAG.csv", FILE_APPEND);
+            // Generowanie pięknej nazwy z datą i godziną (np. /DIAG_14_05_2026_15_30.csv)
+            currentLogFileName = "/DIAG_" + getTimeString(true) + ".csv";
+            
+            File f = SD.open(currentLogFileName.c_str(), FILE_APPEND);
             if (f) {
-                f.println("\nCzas_ms,SysON,Auto,Awaria,Prad_A,Cel_A,U_V,P_W,S_VA,Q_VAR,CosFi,DAC1_V,DAC2_V,Temp_C,Wilg_%,Kp,Ki,Kd,Min_A,Max_A");
+                // Polskie nagłówki Excela - separator to średnik (;)
+                f.println("\nCzas_ms;SysON;Auto;Awaria;Prad_A;Cel_A;U_V;P_W;S_VA;Q_VAR;CosFi;DAC1_V;DAC2_V;Temp_C;Wilg_%;Kp;Ki;Kd;Min_A;Max_A");
                 f.close();
             }
         } else {
@@ -1406,8 +1426,11 @@ void setup() {
     WiFi.onEvent(onStationConnected, ARDUINO_EVENT_WIFI_AP_STACONNECTED); 
     setupWiFi();
 
-    NextionSerial.begin(9600, SERIAL_8N1, PIN_NEXT_RX, PIN_NEXT_TX); 
-    myNex.begin(9600);
+    // Synchronizacja czasu polskiego z serwerami NTP
+    configTzTime("CET-1CEST,M3.5.0,M10.5.0/3", "pool.ntp.org", "time.nist.gov");
+    delay(500); // Daj procesorowi pół sekundy na chwycenie zasięgu z satelity
+
+    NextionSerial.begin(9600, SERIAL_8N1, PIN_NEXT_RX, PIN_NEXT_TX);
     
     PzemSerial.begin(9600, SERIAL_8N1, PIN_PZEM_RX, PIN_PZEM_TX); 
     dht.begin();
@@ -1727,15 +1750,21 @@ void loop() {
             lastLogWriteTime = millis();
             
             if (SD.cardType() != CARD_NONE) {
-                File f = SD.open("/AI_DIAG.csv", FILE_APPEND);
+                // Użycie wygenerowanej, dynamicznej nazwy pliku!
+                File f = SD.open(currentLogFileName.c_str(), FILE_APPEND);
                 if (f) {
-                    String logLine = String(millis()) + "," + String(systemON) + "," + String(modeAUTO) + "," + 
-                                     String(trippedByOverload) + "," + String(current_Amps, 2) + "," + 
-                                     String(Setpoint, 2) + "," + String(pzem_u, 1) + "," + String(pzem_p, 0) + "," + 
-                                     String(pzem_s, 0) + "," + String(pzem_q, 0) + "," + String(pzem_pf, 2) + "," + 
-                                     String(currentDac1, 2) + "," + String(currentDac2, 2) + "," + 
-                                     String(dht_t, 1) + "," + String(dht_h, 0) + "," + String(Kp, 2) + "," + 
-                                     String(Ki, 2) + "," + String(Kd, 2) + "," + String(minLimit, 1) + "," + String(maxLimit, 1);
+                    // Budowa paczki z użyciem średników zamiast przecinków
+                    String logLine = String(millis()) + ";" + String(systemON) + ";" + String(modeAUTO) + ";" + 
+                                     String(trippedByOverload) + ";" + String(current_Amps, 2) + ";" + 
+                                     String(Setpoint, 2) + ";" + String(pzem_u, 1) + ";" + String(pzem_p, 0) + ";" + 
+                                     String(pzem_s, 0) + ";" + String(pzem_q, 0) + ";" + String(pzem_pf, 2) + ";" + 
+                                     String(currentDac1, 2) + ";" + String(currentDac2, 2) + ";" + 
+                                     String(dht_t, 1) + ";" + String(dht_h, 0) + ";" + String(Kp, 2) + ";" + 
+                                     String(Ki, 2) + ";" + String(Kd, 2) + ";" + String(minLimit, 1) + ";" + String(maxLimit, 1);
+                    
+                    // PRO TRIK: Zamiana kropki na przecinek, żeby polski Excel widział to jako liczby
+                    logLine.replace(".", ",");
+                    
                     f.println(logLine);
                     f.close();
                 }
