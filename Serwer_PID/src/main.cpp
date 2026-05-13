@@ -424,15 +424,26 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
                 </div>
                 
                 <div class="card">
-                    <h3 style="margin-top:0;">3. Strojenie Algorytmu PID</h3>
-                    <p class="help-text">Parametry dynamiki sterownika. Kp (Szybkość reakcji), Ki (Korekta odchyleń stałych), Kd (Hamowanie gwałtownych skoków).</p>
-                    <form onsubmit="cmdPID(event)">
-                        <label>Nastawa P (Kp)</label><input type="number" step="0.01" id="kp" required>
-                        <label>Nastawa I (Ki)</label><input type="number" step="0.01" id="ki" required>
-                        <label>Nastawa D (Kd)</label><input type="number" step="0.01" id="kd" required>
-                        <button type="submit" class="submit-btn" style="background:#555; color:#fff;">WYŚLIJ PID DO MASZYNY</button>
-                    </form>
-                </div>
+                    <h3 style="margin-top:0;">3. Zaawansowane Strojenie PID (Opóźnienia Transportowe)</h3>
+                    <p class="help-text">Zintegrowane parametry bazowej dynamiki (P, I, D) poszerzone o redukcję efektów grawitacyjnych dla materiałów wolno zsuwających się.</p>
+                    <form onsubmit="cmdPID(event)">
+                        <label>Nastawa P (Kp)</label><input type="number" step="0.01" id="kp" required>
+                        <label>Nastawa I (Ki)</label><input type="number" step="0.01" id="ki" required>
+                        <label>Nastawa D (Kd)</label><input type="number" step="0.01" id="kd" required>
+                        
+                        <hr style="border: 0; border-top: 1px solid #444; margin: 15px 0;">
+                        
+                        <label style="color:var(--accent);">Czas Próbkowania Zwłoki [s]</label>
+                        <p class="help-text" style="margin-top:0;">Zablokuj wyjście PID maszyny na dany czas, czekając na fizyczną reakcję noży tnących granulatora po zmianie prędkości.</p>
+                        <input type="number" step="0.1" min="0.1" max="60.0" id="delayTime" required>
+                        
+                        <label style="color:var(--accent);">Inteligentny Deadband [A]</label>
+                        <p class="help-text" style="margin-top:0;">Odchylenie, w granicach którego PID zamraża ingerencję uznając prąd za "stabilny" i chroniąc falownik przed pulsującym szarpaniem wyjścia.</p>
+                        <input type="number" step="0.1" min="0.0" max="10.0" id="deadBand" required>
+                        
+                        <button type="submit" class="submit-btn" style="background:#555; color:#fff;">WYŚLIJ UST. DYNAMIKI DO MASZYNY</button>
+                    </form>
+                </div>
                 
                 <div class="card">
                     <h3 style="margin-top:0; color:var(--green);">4. Ustawienia Bezpieczeństwa</h3>
@@ -609,7 +620,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         // Deklaracje komend parsujących ciągi tekstowe z formularzy do formatu strukturalnego maszyny
         function cmdLimits(e) { e.preventDefault(); sendCmd(`CMD:LIMITS:${document.getElementById('minL').value}:${document.getElementById('maxL').value}`); }
         function cmdRatios(e) { e.preventDefault(); sendCmd(`CMD:RATIOS:${document.getElementById('dac1r').value}:${document.getElementById('dac2r').value}`); }
-        function cmdPID(e) { e.preventDefault(); sendCmd(`CMD:PID:${document.getElementById('kp').value}:${document.getElementById('ki').value}:${document.getElementById('kd').value}`); }
+        function cmdPID(e) { e.preventDefault(); sendCmd(`CMD:PID:${document.getElementById('kp').value}:${document.getElementById('ki').value}:${document.getElementById('kd').value}:${document.getElementById('delayTime').value}:${document.getElementById('deadBand').value}`); }
         function cmdAlarms(e) { e.preventDefault(); sendCmd(`CMD:ALARMS:${document.getElementById('ovL').value}:${document.getElementById('recL').value}`); }
         function cmdVoltLimits(e) { e.preventDefault(); sendCmd(`CMD:VOLT:${document.getElementById('minV').value}:${document.getElementById('maxV').value}`); }
         function cmdOutMode(e) { e.preventDefault(); sendCmd(`CMD:OUTMODE:${document.getElementById('outMode').value}`); }
@@ -773,8 +784,10 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
                         if(d.minL !== undefined) document.getElementById('minL').value = d.minL;
                         if(d.maxL !== undefined) document.getElementById('maxL').value = d.maxL;
                         if(d.kp !== undefined) document.getElementById('kp').value = d.kp;
-                        if(d.ki !== undefined) document.getElementById('ki').value = d.ki;
-                        if(d.kd !== undefined) document.getElementById('kd').value = d.kd;
+                        if(d.ki !== undefined) document.getElementById('ki').value = d.ki;
+                        if(d.kd !== undefined) document.getElementById('kd').value = d.kd;
+                        if(d.dt !== undefined) document.getElementById('delayTime').value = d.dt;
+                        if(d.db !== undefined) document.getElementById('deadBand').value = d.db;
                         if(d.dac1R !== undefined) document.getElementById('dac1r').value = d.dac1R;
                         if(d.dac2R !== undefined) document.getElementById('dac2r').value = d.dac2R;
                         if(d.ovL !== undefined) document.getElementById('ovL').value = d.ovL;
