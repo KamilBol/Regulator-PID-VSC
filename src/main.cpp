@@ -484,9 +484,17 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
             delayTimeSek = msg.substring(p3 + 1, p4).toFloat();
             deadbandAmps = msg.substring(p4 + 1).toFloat();
             
+            // Zabezpieczenie przed wpisaniem wartości ujemnych z palca
+            if(delayTimeSek < 0.0) delayTimeSek = 0.0;
+            if(deadbandAmps < 0.0) deadbandAmps = 0.0;
+
             memory.putFloat("delayTime", delayTimeSek);
             memory.putFloat("deadBand", deadbandAmps);
-            myPID.SetSampleTime((int)(delayTimeSek * 1000));
+            
+            // Trik "pod maską" chroniący układ:
+            // Jeśli operator wpisał 0.0, maszyna w tle przeliczy to na bezpieczne 100 ms (0.1s).
+            int bezpiecznyCzas = (delayTimeSek <= 0.0) ? 100 : (int)(delayTimeSek * 1000);
+            myPID.SetSampleTime(bezpiecznyCzas);
         }
 
         myPID.SetTunings(Kp, Ki, Kd); 
@@ -1407,7 +1415,11 @@ void setup() {
     stopRegulator(); 
     
     myPID.SetMode(AUTOMATIC); 
-    myPID.SetSampleTime((int)(delayTimeSek * 1000));  // Czas sterowany ze strony WWW!
+    
+    // Ochrona startowa PID z pamięci Flash
+    int bezpiecznyCzas = (delayTimeSek <= 0.0) ? 100 : (int)(delayTimeSek * 1000);
+    myPID.SetSampleTime(bezpiecznyCzas);
+    
     triggerBlink(2, 500); 
 }
 

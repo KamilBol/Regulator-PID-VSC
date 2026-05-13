@@ -342,23 +342,23 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     
     <div class="card">
         <h3 style="margin-top:0;">3. Zaawansowane Strojenie PID</h3>
-        <p class="help-text">Parametry P, I, D oraz kompensacja opóźnienia transportowego materiału i strefa stabilności (Deadband).</p>
+        <p class="help-text">Główne parametry algorytmu (P, I, D) oraz ustawienia zapobiegające "panikowaniu" i szarpaniu maszyny.</p>
         <form onsubmit="savePID(event)">
-            <label>Współczynnik P</label><input type="number" step="0.01" id="kp" required>
-            <label>Współczynnik I</label><input type="number" step="0.01" id="ki" required>
-            <label>Współczynnik D</label><input type="number" step="0.01" id="kd" required>
+            <label>Nastawa P (Kp) - Siła reakcji na błąd</label><input type="number" step="0.01" id="kp" required>
+            <label>Nastawa I (Ki) - Upór w dążeniu do celu</label><input type="number" step="0.01" id="ki" required>
+            <label>Nastawa D (Kd) - Tłumik nagłych skoków</label><input type="number" step="0.01" id="kd" required>
             
             <hr style="border: 0; border-top: 1px solid #444; margin: 15px 0;">
             
-            <label style="color:var(--accent);">Czas zwłoki maszyny [s]</label>
-            <p class="help-text" style="margin-top:0;">Co ile sekund algorytm ma analizować zmiany (od 0.1 do 60.0 s).</p>
-            <input type="number" step="0.1" min="0.1" max="60.0" id="delayTime" required>
+            <label style="color:var(--accent);">Czas dojazdu materiału do noży [s]</label>
+            <p class="help-text" style="margin-top:0;">Ile sekund mija, zanim zmiana obrotów podajnika wpłynie na prąd granulatora? Maszyna odczeka ten czas po każdej zmianie, żeby uniknąć przeregulowania. Wpisz "0", aby system reagował natychmiast, bez czekania.</p>
+            <input type="number" step="0.1" min="0.0" max="60.0" id="delayTime" required>
             
-            <label style="color:var(--accent);">Strefa Nieczułości (Deadband) [A]</label>
-            <p class="help-text" style="margin-top:0;">Tolerancja błędu. Jeśli prąd waha się w tym zakresie wokół celu, PID nie reaguje, utrzymując płynność.</p>
+            <label style="color:var(--accent);">Tolerancja wahań prądu [A]</label>
+            <p class="help-text" style="margin-top:0;">Zapas błędu. Jeśli cel to 38A, a wpiszesz tu 1.0A, to prąd skaczący między 37A a 39A zostanie zignorowany. Zapobiega to ciągłemu szarpaniu falownikiem. Wpisz "0", aby układ reagował na każdy ułamek Ampera.</p>
             <input type="number" step="0.1" min="0.0" max="10.0" id="deadBand" required>
 
-            <button type="submit" class="submit-btn" style="background:#555; color:#fff;">ZAPISZ DYNAMIKĘ PID</button>
+            <button type="submit" class="submit-btn" style="background:#555; color:#fff;">ZAPISZ USTAWIENIA PID</button>
         </form>
     </div>
     
