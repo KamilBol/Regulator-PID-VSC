@@ -473,9 +473,22 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     else if (msg.startsWith("CMD:PID:")) {
         int p1 = msg.indexOf(':', 8); 
         int p2 = msg.indexOf(':', p1 + 1);
+        int p3 = msg.indexOf(':', p2 + 1);
+        int p4 = msg.indexOf(':', p3 + 1);
+        
         Kp = msg.substring(8, p1).toFloat(); 
         Ki = msg.substring(p1 + 1, p2).toFloat(); 
-        Kd = msg.substring(p2 + 1).toFloat();
+        Kd = msg.substring(p2 + 1, p3).toFloat();
+        
+        if (p3 != -1 && p4 != -1) {
+            delayTimeSek = msg.substring(p3 + 1, p4).toFloat();
+            deadbandAmps = msg.substring(p4 + 1).toFloat();
+            
+            memory.putFloat("delayTime", delayTimeSek);
+            memory.putFloat("deadBand", deadbandAmps);
+            myPID.SetSampleTime((int)(delayTimeSek * 1000));
+        }
+
         myPID.SetTunings(Kp, Ki, Kd); 
         memory.putFloat("kp", Kp); 
         memory.putFloat("ki", Ki); 
