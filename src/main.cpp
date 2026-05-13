@@ -246,28 +246,32 @@ String getTimeString(bool forFileName = false) {
     }
     return String(buffer);
 }
-// Inicjalizacja samej karty pamieci (sprzetowo)
+// 1. Inicjalizacja sprzetowa karty (wywoływana na początku setup)
 void initSD() {
     SPI.begin(PIN_SD_SCK, PIN_SD_MISO, PIN_SD_MOSI, PIN_SD_CS); 
     if (SD.begin(PIN_SD_CS)) { 
         statusSD = true; 
+        Serial.println("[SYSTEM] Karta SD zainicjalizowana poprawnie.");
     } else { 
         statusSD = false; 
         myNex.writeStr("sd.txt", "ERR"); 
+        Serial.println("[BLAD] Nie odnaleziono karty SD!");
     }
 }
 
-// Inteligentny zapis raportu do AI_LOG po odczekaniu na siec i rozgrzaniu czujnikow
+// 2. Inteligentny raport startowy (wywoływany na samym koncu setup)
 void logBootEvent() {
+    // Jeśli karta nie wstała sprzetowo, nie próbujemy nawet otwierać pliku
     if (!statusSD) return;
     
-    // Czekamy maksymalnie 5 sekund na pobranie czasu z zegara atomowego (NTP)
+    Serial.println("[NTP] Czekam na synchronizację czasu dla logów...");
+    // Czekamy max 5 sekund na czas z sieci
     for(int i = 0; i < 50; i++) {
         if (getTimeString() != "Brak synchronizacji z siecia") break;
         delay(100);
     }
     
-    // Wymuszony odczyt (Czujnik DHT potrzebuje ok. 2 sekund od wlaczenia pradu)
+    // Odczyt czujników (rozgrzanych po kilku sekundach setupu)
     float boot_temp = dht.readTemperature();
     float boot_hum = dht.readHumidity();
 
@@ -283,6 +287,9 @@ void logBootEvent() {
         f.println("Klimat Szafy (DHT): " + String(isnan(boot_temp) ? "BLAD ODCZYTU" : String(boot_temp, 1) + " st.C / " + String(boot_hum, 0) + "% Wilgotnosci"));
         f.println("========================================");
         f.close(); 
+        Serial.println("[SYSTEM] Raport startowy zapisany w AI_LOG.txt");
+    } else {
+        Serial.println("[BLAD] Nie udalo sie otworzyc pliku AI_LOG.txt do zapisu!");
     }
 }
 
@@ -1483,6 +1490,9 @@ void setup() {
     // Ochrona startowa PID z pamięci Flash
     int bezpiecznyCzas = (delayTimeSek <= 0.0) ? 100 : (int)(delayTimeSek * 1000);
     myPID.SetSampleTime(bezpiecznyCzas);
+    
+    // Inteligentny raport startowy (Czeka na sieć i czujniki)
+    logBootEvent();
     
     triggerBlink(2, 500); 
 }
