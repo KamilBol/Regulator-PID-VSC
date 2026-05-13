@@ -118,6 +118,10 @@ String remoteOtaState = "";
 float napiecieZadajnika = 0.0; 
 float currentDac1 = 0.0; 
 float currentDac2 = 0.0;
+// --- REJESTRATOR DIAGNOSTYCZNY (DATA LOGGER) ---
+bool isLoggingActive = false;
+unsigned long logEndTime = 0;
+unsigned long lastLogWriteTime = 0;
 
 unsigned long lastUpdate = 0; 
 unsigned long lastFastUpdate = 0;
@@ -727,7 +731,9 @@ void handleApiHealth() {
     
     json += "\"up\":\"" + upStr + "\",\"heap_pct\":\"" + String(((float)ESP.getFreeHeap() / ESP.getHeapSize()) * 100.0, 1) + "\",\"cpu\":\"" + String(ESP.getCpuFreqMHz()) + " MHz\",";
     json += "\"chip\":\"" + String(ESP.getChipModel()) + " (" + String(ESP.getChipCores()) + " Core)\",\"sketch\":\"" + String(ESP.getSketchSize() / 1024) + " KB\",";
-    json += "\"clients\":\"" + String(WiFi.softAPgetStationNum()) + "\",\"router_ip\":\"" + ((WiFi.status() == WL_CONNECTED) ? WiFi.localIP().toString() : "Brak (AP)") + "\"}";
+    int logRem = isLoggingActive ? (logEndTime - millis()) / 1000 : 0;
+    json += "\"clients\":\"" + String(WiFi.softAPgetStationNum()) + "\",\"router_ip\":\"" + ((WiFi.status() == WL_CONNECTED) ? WiFi.localIP().toString() : "Brak (AP)") + "\",";
+    json += "\"log_rem\":\"" + String(logRem) + "\"}";
     
     server.send(200, "application/json", json);
 }
@@ -890,6 +896,25 @@ void handleSetMQTT() {
     server.send(200, "text/plain", "OK"); 
     delay(500); 
     ESP.restart(); 
+}
+void handleStartLog() {
+    if (!checkAuth()) return;
+    if (server.hasArg("min")) {
+        int mins = server.arg("min").toInt();
+        if (mins > 0 && SD.cardType() != CARD_NONE) {
+            isLoggingActive = true;
+            logEndTime = millis() + (mins * 60000UL);
+            
+            File f = SD.open("/AI_DIAG.csv", FILE_APPEND);
+            if (f) {
+                f.println("\nCzas_ms,SysON,Auto,Awaria,Prad_A,Cel_A,U_V,P_W,S_VA,Q_VAR,CosFi,DAC1_V,DAC2_V,Temp_C,Wilg_%,Kp,Ki,Kd,Min_A,Max_A");
+                f.close();
+            }
+        } else {
+            isLoggingActive = false;
+        }
+    }
+    server.send(200, "text/plain", "OK");
 }
 
 void handleRestart() { 
@@ -1074,7 +1099,8 @@ void setupWiFi() {
     server.on("/api/set_volt_limits", HTTP_POST, handleSetVoltLimits); 
     server.on("/api/set_wifi", HTTP_POST, handleSetWiFi); 
     server.on("/api/set_mqtt", HTTP_POST, handleSetMQTT);
-    server.on("/api/restart", HTTP_POST, handleRestart); 
+    server.on("/api/restart", HTTP_POST, handleRestart);
+    server.on("/api/start_log", HTTP_POST, handleStartLog);
     server.on("/api/save_defaults", HTTP_POST, handleSaveDefaults); 
     server.on("/api/restore_defaults", HTTP_POST, handleRestoreDefaults);
     
@@ -1689,6 +1715,32 @@ void loop() {
         
         int apState = memory.getInt("apState", 1); 
         myNex.writeStr("page4.wifilokalonoff.txt", apState == 1 ? "ON" : "OFF");
+    }
+
+    // ====================================================================
+    // REJESTRATOR DIAGNOSTYCZNY (Zapis wszystkiego w 1 linii na SD)
+    // ====================================================================
+    if (isLoggingActive) {
+        if (millis() > logEndTime) {
+            isLoggingActive = false; // Zegar wybił koniec
+        } else if (millis() - lastLogWriteTime >= 1000) { // Zapis równo co 1 sekundę
+            lastLogWriteTime = millis();
+            
+            if (SD.cardType() != CARD_NONE) {
+                File f = SD.open("/AI_DIAG.csv", FILE_APPEND);
+                if (f) {
+                    String logLine = String(millis()) + "," + String(systemON) + "," + String(modeAUTO) + "," + 
+                                     String(trippedByOverload) + "," + String(current_Amps, 2) + "," + 
+                                     String(Setpoint, 2) + "," + String(pzem_u, 1) + "," + String(pzem_p, 0) + "," + 
+                                     String(pzem_s, 0) + "," + String(pzem_q, 0) + "," + String(pzem_pf, 2) + "," + 
+                                     String(currentDac1, 2) + "," + String(currentDac2, 2) + "," + 
+                                     String(dht_t, 1) + "," + String(dht_h, 0) + "," + String(Kp, 2) + "," + 
+                                     String(Ki, 2) + "," + String(Kd, 2) + "," + String(minLimit, 1) + "," + String(maxLimit, 1);
+                    f.println(logLine);
+                    f.close();
+                }
+            }
+        }
     }
 }
 

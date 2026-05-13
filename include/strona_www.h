@@ -470,6 +470,25 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         <button onclick="loadSD()" style="padding:10px; background:#444; color:#fff; border:none; width:100%; border-radius:5px;">Odśwież listę plików</button>
         <div id="sd-list" style="margin-top:10px;">Brak plików do wyświetlenia</div>
     </div>
+    <div class="card" style="border: 2px solid var(--purple);">
+        <h3 style="margin-top:0; color:var(--purple);">🔴 Rejestrator Parametrów (Czarna Skrzynka)</h3>
+        <p class="help-text">Moduł zapisuje absolutnie wszystkie 20 kluczowych parametrów maszyny (od prądu po nastawy PID) do pliku AI_DIAG.csv z częstotliwością 1x na sekundę. Używaj tylko do diagnostyki i kalibracji.</p>
+        
+        <div id="log-active-ui" style="display:none; text-align:center; padding: 15px; background:#2a2a2a; border-radius:8px; margin-bottom:15px;">
+            <img src="https://github.com/KamilBol/Regulator-PID-VSC/blob/main/firmware/Logo/Logo%20Bia%C5%82y%20napis%20na%20czarnym%20tle%20mniejsze.jpg?raw=true" style="max-height:50px; border-radius:5px; margin-bottom:10px; animation: pulse 2s infinite;" alt="Logo Rec">
+            <div style="color:var(--red); font-weight:bold; font-size:18px;">🔴 NAGRYWANIE W TOKU</div>
+            <div style="font-size:24px; font-weight:bold; margin-top:5px; color:var(--text);" id="logTimer">--:--</div>
+            <button onclick="triggerLog(0)" style="margin-top:10px; background:var(--red); color:#fff; border:none; padding:10px; border-radius:5px; cursor:pointer; width:100%;">ZATRZYMAJ TERAZ</button>
+        </div>
+
+        <div id="log-start-ui">
+            <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
+                <button onclick="triggerLog(2)" class="submit-btn" style="background:#555; width:30%; margin-top:0; color:#fff;">2 MIN</button>
+                <button onclick="triggerLog(10)" class="submit-btn" style="background:#555; width:30%; margin-top:0; color:#fff;">10 MIN</button>
+                <button onclick="triggerLog(30)" class="submit-btn" style="background:#555; width:30%; margin-top:0; color:#fff;">30 MIN</button>
+            </div>
+        </div>
+    </div>
   </div>
 
   <div id="OTA" class="tab-content">
@@ -583,8 +602,19 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         if(document.getElementById('esp_up')) document.getElementById('esp_up').innerText = data.up; if(document.getElementById('esp_ram')) document.getElementById('esp_ram').innerText = data.heap_pct + " %";
         if(document.getElementById('esp_cpu')) document.getElementById('esp_cpu').innerText = data.cpu; if(document.getElementById('esp_chip')) document.getElementById('esp_chip').innerText = data.chip;
         if(document.getElementById('esp_flash')) document.getElementById('esp_flash').innerText = data.sketch; if(document.getElementById('esp_rip')) document.getElementById('esp_rip').innerText = data.router_ip;
-      });
-    }, 2000);
+        
+        if(data.log_rem !== undefined && data.log_rem > 0) {
+            document.getElementById('log-active-ui').style.display = 'block';
+            document.getElementById('log-start-ui').style.display = 'none';
+            let m = Math.floor(data.log_rem / 60);
+            let s = data.log_rem % 60;
+            document.getElementById('logTimer').innerText = (m < 10 ? "0"+m : m) + ":" + (s < 10 ? "0"+s : s);
+        } else {
+            document.getElementById('log-active-ui').style.display = 'none';
+            document.getElementById('log-start-ui').style.display = 'block';
+        }
+      });
+    }, 2000);
 
     // ==========================================
     // API POST (Wysyłanie danych z formularzy na ESP32)
@@ -604,6 +634,10 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     function restartESP() { if(confirm("Na pewno chcesz zrestartować układ sterujący maszyny?")) fetch('/api/restart', {method: 'POST'}).then(() => setTimeout(() => location.reload(), 10000)); }
     function saveDefaults() { if(confirm("Czy na pewno chcesz nadpisać wartości domyślne obecnymi?")) fetch('/api/save_defaults', {method: 'POST'}).then(() => alert("Zapisano w pamięci trwałej!")); }
     function restoreDefaults() { if(confirm("UWAGA! Ta operacja zresetuje maszynę do ustawień domyślnych. Kontynuować?")) fetch('/api/restore_defaults', {method: 'POST'}).then(() => setTimeout(() => location.reload(), 8000)); }
+    function triggerLog(mins) {
+        if (mins === 0 && !confirm("Przerwać zapisywanie logów?")) return;
+        fetch('/api/start_log?min=' + mins, {method: 'POST'});
+    }
     
     // Generowanie listy plików SD
     function loadSD() { 
