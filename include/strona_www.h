@@ -341,15 +341,26 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     </div>
     
     <div class="card">
-        <h3 style="margin-top:0;">3. Strojenie PID</h3>
-        <p class="help-text">Parametry dynamiki algorytmu. P (Proporcjonalny) to szybkość reakcji, I (Całkujący) koryguje błędy stałe, D (Różniczkujący) tłumi gwałtowne skoki.</p>
-        <form onsubmit="savePID(event)">
-            <label>Współczynnik P</label><input type="number" step="0.01" id="kp" required>
-            <label>Współczynnik I</label><input type="number" step="0.01" id="ki" required>
-            <label>Współczynnik D</label><input type="number" step="0.01" id="kd" required>
-            <button type="submit" class="submit-btn" style="background:#555; color:#fff;">ZAPISZ PID</button>
-        </form>
-    </div>
+        <h3 style="margin-top:0;">3. Zaawansowane Strojenie PID</h3>
+        <p class="help-text">Parametry P, I, D oraz kompensacja opóźnienia transportowego materiału i strefa stabilności (Deadband).</p>
+        <form onsubmit="savePID(event)">
+            <label>Współczynnik P</label><input type="number" step="0.01" id="kp" required>
+            <label>Współczynnik I</label><input type="number" step="0.01" id="ki" required>
+            <label>Współczynnik D</label><input type="number" step="0.01" id="kd" required>
+            
+            <hr style="border: 0; border-top: 1px solid #444; margin: 15px 0;">
+            
+            <label style="color:var(--accent);">Czas zwłoki maszyny [s]</label>
+            <p class="help-text" style="margin-top:0;">Co ile sekund algorytm ma analizować zmiany (od 0.1 do 60.0 s).</p>
+            <input type="number" step="0.1" min="0.1" max="60.0" id="delayTime" required>
+            
+            <label style="color:var(--accent);">Strefa Nieczułości (Deadband) [A]</label>
+            <p class="help-text" style="margin-top:0;">Tolerancja błędu. Jeśli prąd waha się w tym zakresie wokół celu, PID nie reaguje, utrzymując płynność.</p>
+            <input type="number" step="0.1" min="0.0" max="10.0" id="deadBand" required>
+
+            <button type="submit" class="submit-btn" style="background:#555; color:#fff;">ZAPISZ DYNAMIKĘ PID</button>
+        </form>
+    </div>
     
     <div class="card">
         <h3 style="margin-top:0; color:var(--green);">4. Alarmy i Zabezpieczenia</h3>
@@ -544,7 +555,8 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
             document.getElementById('outMode').value = data.outM; document.getElementById('dac1r').value = data.dac1R; document.getElementById('dac2r').value = data.dac2R;
             document.getElementById('ovL').value = data.ovL; document.getElementById('recL').value = data.recL; document.getElementById('minL').value = data.minL;
             document.getElementById('maxL').value = data.maxL; document.getElementById('kp').value = data.kp; document.getElementById('ki').value = data.ki;
-            document.getElementById('kd').value = data.kd; document.getElementById('dac1c').value = data.dac1C; document.getElementById('dac2c').value = data.dac2C;
+            document.getElementById('kd').value = data.kd; document.getElementById('delayTime').value = data.dt; document.getElementById('deadBand').value = data.db;
+            document.getElementById('dac1c').value = data.dac1C; document.getElementById('dac2c').value = data.dac2C;
             document.getElementById('minV').value = data.minV; document.getElementById('maxV').value = data.maxV; document.getElementById('wifiSSID').value = data.wifi_s;
             document.getElementById('mqSrv').value = data.mq_srv; document.getElementById('mqUsr').value = data.mq_usr; document.getElementById('mqId').value = data.mq_id;
         }
@@ -575,7 +587,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     function saveRatios(e) { e.preventDefault(); fetch('/api/set_ratios?r1='+document.getElementById('dac1r').value+'&r2='+document.getElementById('dac2r').value, {method: 'POST'}).then(() => alert("Zapisano!")); }
     function saveAlarms(e) { e.preventDefault(); fetch('/api/set_alarms?ov='+document.getElementById('ovL').value+'&rec='+document.getElementById('recL').value, {method: 'POST'}).then(() => alert("Zapisano!")); }
     function saveLimits(e) { e.preventDefault(); fetch('/api/set_limits?min='+document.getElementById('minL').value+'&max='+document.getElementById('maxL').value, {method: 'POST'}).then(() => alert("Zapisano!")); }
-    function savePID(e) { e.preventDefault(); fetch('/api/set_pid?kp='+document.getElementById('kp').value+'&ki='+document.getElementById('ki').value+'&kd='+document.getElementById('kd').value, {method: 'POST'}).then(() => alert("Zapisano!")); }
+    function savePID(e) { e.preventDefault(); fetch('/api/set_pid?kp='+document.getElementById('kp').value+'&ki='+document.getElementById('ki').value+'&kd='+document.getElementById('kd').value+'&dt='+document.getElementById('delayTime').value+'&db='+document.getElementById('deadBand').value, {method: 'POST'}).then(() => alert("Zapisano ustawienia dynamiki!")); }
     function saveCalib(e) { e.preventDefault(); fetch('/api/set_calib?c1='+document.getElementById('dac1c').value+'&c2='+document.getElementById('dac2c').value, {method: 'POST'}).then(() => alert("Zapisano!")); }
     function saveVoltLimits(e) { e.preventDefault(); fetch('/api/set_volt_limits?min='+document.getElementById('minV').value+'&max='+document.getElementById('maxV').value, {method: 'POST'}).then(() => alert("Zapisano!")); }
     function saveWiFi(e) { e.preventDefault(); fetch('/api/set_wifi?s='+encodeURIComponent(document.getElementById('wifiSSID').value)+'&p='+encodeURIComponent(document.getElementById('wifiPASS').value), {method: 'POST'}).then(() => { alert("Zapisano. Maszyna uruchomi się ponownie."); setTimeout(() => location.reload(), 8000); }); }

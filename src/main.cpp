@@ -42,7 +42,7 @@
 #define PIN_SD_MOSI       17
 #define PIN_SD_MISO       18
 #define PIN_POT_SYMULACJA 3 
-#define PIN_LED           2 
+#define PIN_LED           48 
 
 // Logika przekaźników (zależna od modułu - tu stan niski załącza przekaźnik)
 #define RELAY_ON          LOW
@@ -77,6 +77,9 @@ double Kp = 0.5;
 double Ki = 0.1;
 double Kd = 0.15; 
 PID myPID(&Input, &Output, &Setpoint, Kp, Ki, Kd, DIRECT);
+// --- NOWE PARAMETRY DYNAMIKI (ZWŁOKA I DEADBAND) ---
+float delayTimeSek = 2.0;    // Czas zwłoki algorytmu w sekundach
+float deadbandAmps = 1.0;    // Strefa nieczułości w Amperach
 
 // --- KONFIGURACJA SPRZĘTOWA (FALOWNIKI) ---
 int outMode = 0; 
@@ -227,9 +230,14 @@ void handleLED() {
 
 // Inicjalizacja i sprawdzenie karty pamięci SD
 void initSD() {
+    // 1. Ustawienie fizycznych pinów dla głównej szyny SPI
     SPI.begin(PIN_SD_SCK, PIN_SD_MISO, PIN_SD_MOSI, PIN_SD_CS); 
-    if (SD.begin(PIN_SD_CS)) { 
+    
+    // 2. KRYTYCZNE: Podajemy obiekt 'SPI' do biblioteki SD i zbijamy prędkość 
+    // do bezpiecznych 4 MHz (4000000), żeby sygnał przeszedł przez kable stykowe
+    if (SD.begin(PIN_SD_CS, SPI, 4000000)) { 
         statusSD = true; 
+        Serial.println("[SD] SUKCES! Karta znaleziona i zamontowana.");
         File f = SD.open("/AI_LOG.txt", FILE_APPEND); 
         if (f) { 
             f.println("=== START SYSTEMU - V16.5 ==="); 
@@ -237,6 +245,7 @@ void initSD() {
         }
     } else { 
         statusSD = false; 
+        Serial.println("[SD] BŁĄD! Moduł SD milczy.");
         myNex.writeStr("sd.txt", "ERR"); 
     }
 }
@@ -666,8 +675,7 @@ void handleApiData() {
     json += "\"trip\":\"" + String(trippedByOverload ? 1 : 0) + "\",\"sysON\":\"" + String(systemON ? 1 : 0) + "\",\"autoM\":\"" + String(modeAUTO ? 1 : 0) + "\",";
     json += "\"volt\":\"" + String(pzem_u, 1) + "\",\"pow\":\"" + String(pzem_p, 0) + "\",\"ap_pow\":\"" + String(pzem_s, 0) + "\",\"re_pow\":\"" + String(pzem_q, 0) + "\",\"pf\":\"" + String(pzem_pf, 2) + "\",";
     json += "\"temp\":\"" + String(dht_t, 1) + "\",\"hum\":\"" + String(dht_h, 0) + "\",\"minL\":\"" + String(minLimit, 1) + "\",\"maxL\":\"" + String(maxLimit, 1) + "\",";
-    json += "\"kp\":\"" + String(Kp, 3) + "\",\"ki\":\"" + String(Ki, 3) + "\",\"kd\":\"" + String(Kd, 3) + "\",\"outM\":\"" + String(outMode) + "\",";
-    json += "\"dac1R\":\"" + String(dac1Ratio, 0) + "\",\"dac2R\":\"" + String(dac2Ratio, 0) + "\",\"ovL\":\"" + String(overloadLimit, 1) + "\",\"recL\":\"" + String(recoveryLimit, 1) + "\",";
+    json += "\"kp\":\"" + String(Kp, 3) + "\",\"ki\":\"" + String(Ki, 3) + "\",\"kd\":\"" + String(Kd, 3) + "\",\"dt\":\"" + String(delayTimeSek, 1) + "\",\"db\":\"" + String(deadbandAmps, 1) + "\",\"outM\":\"" + String(outMode) + "\",";
     json += "\"dac1C\":\"" + String(dac1Calib, 2) + "\",\"dac2C\":\"" + String(dac2Calib, 2) + "\",\"minV\":\"" + String(minDacVolt, 2) + "\",\"maxV\":\"" + String(maxDacVolt, 2) + "\",";
     json += "\"wifi_s\":\"" + routerSSID + "\",\"mq_srv\":\"" + mqtt_server + "\",\"mq_usr\":\"" + mqtt_user + "\",\"mq_id\":\"" + mqtt_id + "\"}";
     
@@ -787,6 +795,18 @@ void handleSetPID() {
         memory.putFloat("ki", Ki); 
         memory.putFloat("kd", Kd); 
         myPID.SetTunings(Kp, Ki, Kd); 
+
+        // Odbiór nowych parametrów Czasu Zwłoki i Strefy Nieczułości
+        if(server.hasArg("dt")) {
+            delayTimeSek = server.arg("dt").toFloat();
+            memory.putFloat("delayTime", delayTimeSek);
+            myPID.SetSampleTime((int)(delayTimeSek * 1000)); // Wrzucenie czasu w milisekundach do biblioteki
+        }
+        if(server.hasArg("db")) {
+            deadbandAmps = server.arg("db").toFloat();
+            memory.putFloat("deadBand", deadbandAmps);
+        }
+
         triggerBlink(1, 1000); 
     } 
     server.send(200, "text/plain", "OK"); 
@@ -1291,7 +1311,10 @@ void setup() {
     Kp = memory.getFloat("kp", 0.5); 
     Ki = memory.getFloat("ki", 0.1); 
     Kd = memory.getFloat("kd", 0.15); 
-    myPID.SetTunings(Kp, Ki, Kd); 
+    myPID.SetTunings(Kp, Ki, Kd);
+    // Wczytanie Zwłoki i Strefy Nieczułości
+    delayTimeSek = memory.getFloat("delayTime", 2.0);
+    deadbandAmps = memory.getFloat("deadBand", 1.0);
     
     outMode = memory.getInt("outMode", 0);
     
@@ -1371,7 +1394,7 @@ void setup() {
     stopRegulator(); 
     
     myPID.SetMode(AUTOMATIC); 
-    myPID.SetSampleTime(200); 
+    myPID.SetSampleTime((int)(delayTimeSek * 1000));  // Czas sterowany ze strony WWW!
     triggerBlink(2, 500); 
 }
 
@@ -1553,7 +1576,20 @@ void loop() {
         
         if (systemON) { 
             Setpoint = maxLimit - 1.0; 
-            Input = current_Amps; 
+            
+            // Wyliczamy absolutny błąd (odchylenie od celu)
+            float error = abs(Setpoint - current_Amps);
+            
+            // INTELIGENTNY DEADBAND
+            if (error <= deadbandAmps) {
+                // Prąd w granicach tolerancji. Oszukujemy PID, że wszystko jest idealnie.
+                // Dzięki temu PID zatrzyma się i "zamrozi" obecne napięcie falownika.
+                Input = Setpoint; 
+            } else {
+                // Prąd uciekł za daleko - PID widzi rzeczywistość i oblicza korektę napięcia.
+                Input = current_Amps; 
+            }
+
             myPID.Compute(); 
         }
     }
