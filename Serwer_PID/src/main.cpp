@@ -579,15 +579,18 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
                     <div id="sd-list">Brak danych... kliknij Odśwież.</div>
                 </div>
 
-                <div class="card" style="border: 2px solid var(--purple);">
+                <div class="card" style="border: 1px solid var(--purple);">
                     <h3 style="margin-top:0; color:var(--purple);">🔴 Rejestrator Parametrów (Czarna Skrzynka)</h3>
-                    <p class="help-text">Moduł wysyła bezpośredni sygnał w sieci LAN do maszyny, zlecając jej gęsty zapis CSV. Twój serwer HUB musi być w zasięgu tego samego routera co maszyna!</p>
+                    <p class="help-text">Moduł zapisuje absolutnie wszystkie 20 kluczowych parametrów maszyny (od prądu po nastawy PID) do pliku AI_DIAG.csv z częstotliwością 1x na sekundę. Używaj tylko do diagnostyki i kalibracji.</p>
                     
-                    <div id="log-active-ui" style="display:none; text-align:center; padding: 15px; background:#2a2a2a; border-radius:8px; margin-bottom:15px;">
-                        <img src="https://github.com/KamilBol/Regulator-PID-VSC/blob/main/firmware/Logo/Logo%20Bia%C5%82y%20napis%20na%20czarnym%20tle%20mniejsze.jpg?raw=true" style="max-height:50px; border-radius:5px; margin-bottom:10px; animation: pulse 2s infinite;" alt="Logo Rec">
-                        <div style="color:var(--red); font-weight:bold; font-size:18px;">🔴 REJESTRACJA W TOKU...</div>
-                        <div style="font-size:24px; font-weight:bold; margin-top:5px; color:var(--text);" id="logTimer">--:--</div>
-                        <button onclick="triggerLog(0)" style="margin-top:10px; background:var(--red); color:#fff; border:none; padding:10px; border-radius:5px; cursor:pointer; width:100%;">ZATRZYMAJ TERAZ</button>
+                    <div id="log-active-ui" style="display:none; text-align:center; padding: 25px 15px; background:#222; border-radius:8px; margin-bottom:15px; box-shadow: inset 0 0 10px #000;">
+                        <img src="https://github.com/KamilBol/Regulator-PID-VSC/blob/main/firmware/Logo/Logo%20Bia%C5%82y%20napis%20na%20czarnym%20tle%20mniejsze.jpg?raw=true" style="max-height:55px; border-radius:6px; margin-bottom:15px;" alt="Logo Rec">
+                        <div style="color:var(--red); font-weight:bold; font-size:18px; margin-bottom: 15px; display:flex; align-items:center; justify-content:center; gap:10px;">
+                            <span style="display:inline-block; width:16px; height:16px; background:var(--red); border-radius:50%; animation: pulse 1.5s infinite; box-shadow: 0 0 8px var(--red);"></span>
+                            NAGRYWANIE W TOKU
+                        </div>
+                        <div style="font-size:36px; font-weight:bold; margin-bottom:20px; color:var(--text); text-shadow: 0 2px 4px rgba(0,0,0,0.5);" id="logTimer">--:--</div>
+                        <button onclick="triggerLog(0)" class="submit-btn" style="background:var(--red); color:#fff; border:none; padding:15px; border-radius:6px; cursor:pointer; width:100%; font-size:16px; margin:0; font-weight:bold;">ZATRZYMAJ TERAZ</button>
                     </div>
 
                     <div id="log-start-ui">
