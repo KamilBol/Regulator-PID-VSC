@@ -279,6 +279,8 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
             background-color: var(--green); 
             box-shadow: 0 0 8px var(--green);
         }
+            /* Animacja pulsowania dla panelu nagrywania */
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
         .badge-ok { color: var(--green); font-weight: bold; text-shadow: 0 0 5px rgba(76, 175, 80, 0.5); }
         .badge-err { color: var(--red); font-weight: bold; text-shadow: 0 0 5px rgba(244, 67, 54, 0.5); }
         
@@ -404,12 +406,33 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
                 <p style="color:var(--orange); font-size:12px; text-align:center;">Wprowadzane tu zmiany zostaną bezzwłocznie przesłane i wdrożone w wybranej maszynie przez chmurę MQTT.</p>
                 
                 <div class="card">
-                    <h3 style="margin-top:0;">1. Widełki Pracy (Ampery)</h3>
-                    <p class="help-text">Zakres dopuszczalnego poboru prądu. Algorytm dąży do utrzymania prądu na poziomie zbliżonym do wartości Max.</p>
-                    <form onsubmit="cmdLimits(event)">
-                        <label>Min [A]</label><input type="number" step="0.1" id="minL" required>
-                        <label>Max [A]</label><input type="number" step="0.1" id="maxL" required>
-                        <button type="submit" class="submit-btn">WYŚLIJ WIDEŁKI DO MASZYNY</button>
+                    <h3 style="margin-top:0;">3. Zaawansowane Strojenie PID</h3>
+                    <p class="help-text" style="margin-top:0; margin-bottom:15px;">Zdalna konfiguracja algorytmu oraz ustawienia zapobiegające szarpaniu maszyny.</p>
+                    <form onsubmit="cmdPID(event)">
+                        
+                        <label style="color:var(--accent); margin-top:0; margin-bottom:2px;">Współczynnik P (Kp) - "Siła Hamulca"</label>
+                        <p class="help-text" style="margin-top:0; margin-bottom:5px;">Mała wartość: zwalnia delikatnie. Duża wartość: gwałtownie ucina zasilanie na falowniku, ale może szarpać maszyną.</p>
+                        <input type="number" step="0.01" id="kp" style="margin-top:0; margin-bottom:15px;" required>
+                        
+                        <label style="color:var(--accent); margin-top:0; margin-bottom:2px;">Współczynnik I (Ki) - "Cierpliwość / Dociskanie"</label>
+                        <p class="help-text" style="margin-top:0; margin-bottom:5px;">Dociska hamulec w czasie, gdy prąd stale jest za wysoki. Zbyt duża wartość sprawi, że maszyna "przedobrzy" i udusi obroty.</p>
+                        <input type="number" step="0.01" id="ki" style="margin-top:0; margin-bottom:15px;" required>
+                        
+                        <label style="color:var(--accent); margin-top:0; margin-bottom:2px;">Współczynnik D (Kd) - "Amortyzator"</label>
+                        <p class="help-text" style="margin-top:0; margin-bottom:5px;">Pomaga płynnie "wyjść z zakrętu", zapobiegając ciągłemu falowaniu. Z reguły bardzo blisko zera (np. 0.05).</p>
+                        <input type="number" step="0.01" id="kd" style="margin-top:0; margin-bottom:5px;" required>
+                        
+                        <hr style="border: 0; border-top: 1px solid #444; margin: 15px 0;">
+                        
+                        <label style="color:var(--accent); margin-top:0; margin-bottom:2px;">Czas dojazdu materiału do noży [s]</label>
+                        <p class="help-text" style="margin-top:0; margin-bottom:5px;">Maszyna odczeka ten czas po każdej zmianie obrotów podajnika. Wpisz "0", aby reagowała natychmiast.</p>
+                        <input type="number" step="0.1" min="0.0" max="60.0" id="delayTime" style="margin-top:0; margin-bottom:15px;" required>
+                        
+                        <label style="color:var(--accent); margin-top:0; margin-bottom:2px;">Tolerancja wahań prądu [A]</label>
+                        <p class="help-text" style="margin-top:0; margin-bottom:5px;">Zapas błędu. Jeśli wpiszesz 1.0A, prąd skaczący +/- 1A wokół celu zostanie zignorowany. Wpisz "0", by reagować na każdy ułamek Ampera.</p>
+                        <input type="number" step="0.1" min="0.0" max="10.0" id="deadBand" style="margin-top:0; margin-bottom:15px;" required>
+
+                        <button type="submit" class="submit-btn" style="background:#555; color:#fff; margin-top:0;">WYŚLIJ USTAWIENIA PID W CHMURĘ</button>
                     </form>
                 </div>
                 
@@ -555,6 +578,26 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
                     <button onclick="reqSDList()" style="padding:10px; background:#444; color:#fff; border:none; border-radius:5px; margin-bottom:15px; width:100%;">🔄 Poproś chmurę o listę plików</button>
                     <div id="sd-list">Brak danych... kliknij Odśwież.</div>
                 </div>
+
+                <div class="card" style="border: 2px solid var(--purple);">
+                    <h3 style="margin-top:0; color:var(--purple);">🔴 Rejestrator Parametrów (Czarna Skrzynka)</h3>
+                    <p class="help-text">Moduł wysyła bezpośredni sygnał w sieci LAN do maszyny, zlecając jej gęsty zapis CSV. Twój serwer HUB musi być w zasięgu tego samego routera co maszyna!</p>
+                    
+                    <div id="log-active-ui" style="display:none; text-align:center; padding: 15px; background:#2a2a2a; border-radius:8px; margin-bottom:15px;">
+                        <img src="https://github.com/KamilBol/Regulator-PID-VSC/blob/main/firmware/Logo/Logo%20Bia%C5%82y%20napis%20na%20czarnym%20tle%20mniejsze.jpg?raw=true" style="max-height:50px; border-radius:5px; margin-bottom:10px; animation: pulse 2s infinite;" alt="Logo Rec">
+                        <div style="color:var(--red); font-weight:bold; font-size:18px;">🔴 REJESTRACJA W TOKU...</div>
+                        <div style="font-size:24px; font-weight:bold; margin-top:5px; color:var(--text);" id="logTimer">--:--</div>
+                        <button onclick="triggerLog(0)" style="margin-top:10px; background:var(--red); color:#fff; border:none; padding:10px; border-radius:5px; cursor:pointer; width:100%;">ZATRZYMAJ TERAZ</button>
+                    </div>
+
+                    <div id="log-start-ui">
+                        <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
+                            <button onclick="triggerLog(2)" class="submit-btn" style="background:#555; width:30%; margin-top:0; color:#fff;">2 MIN</button>
+                            <button onclick="triggerLog(10)" class="submit-btn" style="background:#555; width:30%; margin-top:0; color:#fff;">10 MIN</button>
+                            <button onclick="triggerLog(30)" class="submit-btn" style="background:#555; width:30%; margin-top:0; color:#fff;">30 MIN</button>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <div id="OTA" class="tab-content">
@@ -636,6 +679,19 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         function cmdCalib(e) { e.preventDefault(); sendCmd(`CMD:CALIB:${document.getElementById('dac1c').value}:${document.getElementById('dac2c').value}`); }
         function cmdWiFi(e) { e.preventDefault(); sendCmd(`CMD:WIFI:${document.getElementById('m_wifiSSID').value}:${document.getElementById('m_wifiPASS').value}`); }
         function cmdMQTT(e) { e.preventDefault(); sendCmd(`CMD:MQTT:${document.getElementById('m_mqSrv').value}:${document.getElementById('m_mqUsr').value}:${document.getElementById('m_mqPas').value}:${document.getElementById('m_mqId').value}`); }
+        // Wyzwalanie nagrywania za pomocą bezpośredniego ataku na IP maszyny (Bypassing MQTT Cloud)
+        function triggerLog(mins) {
+            if (!activeMachineIP || activeMachineIP === "--" || activeMachineIP === "Brak (AP)") {
+                alert("Błąd: Serwer HUB nie odebrał lokalnego adresu IP maszyny. Upewnij się, że jesteś połączony z siecią LAN i maszyna zgłosiła swoje IP.");
+                return;
+            }
+            if (mins === 0 && !confirm("Czy na pewno przerwać nagrywanie czarnej skrzynki w maszynie?")) return;
+            
+            // Strzał prosto w API maszyny przez sieć lokalną
+            fetch(`http://${activeMachineIP}/api/start_log?min=${mins}`, {method: 'POST'})
+                .then(() => { if(mins > 0) alert("Rozkaz przyjęty. Maszyna rozpoczęła gęste logowanie na karcie SD!"); })
+                .catch(() => alert("Brak łączności P2P. Twój telefon/komputer musi być zalogowany do tego samego routera WiFi co maszyna!"));
+        }
 
         // Odpalenie zdalnego wgrywania i upewnienie się co do struktury odnośnika internetowego
         function cmdOTA() {
@@ -850,7 +906,26 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
                     document.getElementById('c_musr').value = data.mqtt_usr;
                 }
             });
-        }, 1000); // 1000ms = Sztywny zegar przerwania cyklu pomiarowego Frontendu do uC.
+
+            // Faza 4: Bezpośrednie odpytanie IP maszyny (jeśli jest znane) o to, czy nagrywanie jest aktualnie w toku
+            if (activeMachineIP && activeMachineIP !== "--" && activeMachineIP !== "Brak (AP)") {
+                fetch(`http://${activeMachineIP}/api/health`)
+                    .then(r => r.json())
+                    .then(hData => {
+                        if(hData.log_rem !== undefined && hData.log_rem > 0) {
+                            document.getElementById('log-active-ui').style.display = 'block';
+                            document.getElementById('log-start-ui').style.display = 'none';
+                            let m = Math.floor(hData.log_rem / 60);
+                            let s = hData.log_rem % 60;
+                            document.getElementById('logTimer').innerText = (m < 10 ? "0"+m : m) + ":" + (s < 10 ? "0"+s : s);
+                        } else {
+                            document.getElementById('log-active-ui').style.display = 'none';
+                            document.getElementById('log-start-ui').style.display = 'block';
+                        }
+                    }).catch(e => {}); // Milczymy przy błędzie odpytywania
+            }
+
+        }, 1000); // 1000ms = Sztywny zegar przerwania cyklu pomiarowego
     </script>
 </body>
 </html>
