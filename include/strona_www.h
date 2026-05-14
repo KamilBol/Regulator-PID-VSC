@@ -267,7 +267,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
 
   <div class="header">
       <img src="https://github.com/KamilBol/Regulator-PID-VSC/blob/main/firmware/Logo/Logo%20Bia%C5%82y%20napis%20na%20czarnym%20tle%20mniejsze.jpg?raw=true" class="main-logo" alt="Logo Bolu">
-      <h1>⚙️ Granulator Pro V16.5</h1>
+      <h1>⚙️ Granulator Pro V16.7</h1>
   </div>
   
   <div class="nav">

@@ -1,9 +1,9 @@
 // =====================================================================================
-// REGULATOR PID - V16.6 (SMART OTA, CZYSTY KOD, CHUNKING, FULL COMMENTS)
+// REGULATOR PID - V16.7 (SMART OTA, CZYSTY KOD, CHUNKING, FULL COMMENTS)
 // =====================================================================================
 #include <Arduino.h>
 #include "strona_www.h" // Załączenie naszej zewnętrznej strony HTML/CSS/JS
-#define FIRMWARE_VERSION "V16.6" // Tu wpisuj aktualną wersję przed wgraniem
+#define FIRMWARE_VERSION "V16.7" // Tu wpisuj aktualną wersję przed wgraniem
 
 // --- BIBLIOTEKI SPRZĘTOWE I SENSORY ---
 #include <Wire.h>               // Komunikacja I2C (Zadajnik, Falowniki)
@@ -614,6 +614,22 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
         } 
         ESP.restart();
     }
+    else if (msg.startsWith("CMD:LOG:")) {
+        int mins = msg.substring(8).toInt();
+        if (mins > 0 && statusSD) {
+            isLoggingActive = true;
+            logEndTime = millis() + (mins * 60000UL);
+            currentLogFileName = "/DIAG_" + getTimeString(true) + ".csv";
+            
+            File f = SD.open(currentLogFileName.c_str(), FILE_APPEND);
+            if (f) {
+                f.println("\nCzas_ms;SysON;Auto;Awaria;Prad_A;Cel_A;U_V;P_W;S_VA;Q_VAR;CosFi;DAC1_V;DAC2_V;Temp_C;Wilg_%;Kp;Ki;Kd;Min_A;Max_A");
+                f.close();
+            }
+        } else {
+            isLoggingActive = false;
+        }
+    }
     else if (msg.startsWith("CMD:MQTT:")) {
         int p1 = msg.indexOf(':', 9); 
         int p2 = msg.indexOf(':', p1 + 1); 
@@ -681,6 +697,9 @@ void handleMQTT() {
                 json = "{";
                 json += "\"eco\":1,";
                 json += "\"amp\":" + String(current_Amps, 2) + ",";
+                int logRem = isLoggingActive ? (logEndTime - millis()) / 1000 : 0;
+                if (logRem < 0) logRem = 0;
+                json += "\"log_rem\":" + String(logRem) + ",";
                 json += "\"sysON\":" + String(systemON ? 1 : 0) + ",";
                 json += "\"trip\":" + String(trippedByOverload ? 1 : 0) + ",";
                 json += "\"autoM\":" + String(modeAUTO ? 1 : 0);
@@ -1398,7 +1417,7 @@ void setup() {
     
     delay(2000); 
     Serial.begin(115200); 
-    Serial.println("\n\n--- SYSTEM V16.5 (PRO OTA & LOGO FRONTEND) ---");
+    Serial.println("\n\n--- SYSTEM V16.7 (PRO OTA & LOGO FRONTEND) ---");
 
     // Montowanie pamięci masowej układu (Wczytywanie zapisanych ustawień do zmiennych RAM)
     memory.begin("regulator", false); 

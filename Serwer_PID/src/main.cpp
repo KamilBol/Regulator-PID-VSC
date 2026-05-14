@@ -679,18 +679,12 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
         function cmdCalib(e) { e.preventDefault(); sendCmd(`CMD:CALIB:${document.getElementById('dac1c').value}:${document.getElementById('dac2c').value}`); }
         function cmdWiFi(e) { e.preventDefault(); sendCmd(`CMD:WIFI:${document.getElementById('m_wifiSSID').value}:${document.getElementById('m_wifiPASS').value}`); }
         function cmdMQTT(e) { e.preventDefault(); sendCmd(`CMD:MQTT:${document.getElementById('m_mqSrv').value}:${document.getElementById('m_mqUsr').value}:${document.getElementById('m_mqPas').value}:${document.getElementById('m_mqId').value}`); }
-        // Wyzwalanie nagrywania za pomocą bezpośredniego ataku na IP maszyny (Bypassing MQTT Cloud)
+        // Wyzwalanie nagrywania za pomocą globalnej chmury MQTT
         function triggerLog(mins) {
-            if (!activeMachineIP || activeMachineIP === "--" || activeMachineIP === "Brak (AP)") {
-                alert("Błąd: Serwer HUB nie odebrał lokalnego adresu IP maszyny. Upewnij się, że jesteś połączony z siecią LAN i maszyna zgłosiła swoje IP.");
-                return;
-            }
             if (mins === 0 && !confirm("Czy na pewno przerwać nagrywanie czarnej skrzynki w maszynie?")) return;
             
-            // Strzał prosto w API maszyny przez sieć lokalną
-            fetch(`http://${activeMachineIP}/api/start_log?min=${mins}`, {method: 'POST'})
-                .then(() => { if(mins > 0) alert("Rozkaz przyjęty. Maszyna rozpoczęła gęste logowanie na karcie SD!"); })
-                .catch(() => alert("Brak łączności P2P. Twój telefon/komputer musi być zalogowany do tego samego routera WiFi co maszyna!"));
+            sendCmd('CMD:LOG:' + mins);
+            if(mins > 0) alert("Rozkaz wysłany przez chmurę MQTT!");
         }
 
         // Odpalenie zdalnego wgrywania i upewnienie się co do struktury odnośnika internetowego
@@ -822,6 +816,17 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
                         document.getElementById('esp_rip').innerText = d.ip; 
                         activeMachineIP = d.ip; 
                     }
+                        // --- ODBIÓR STATUSU NAGRYWANIA Z CHMURY ---
+                    if (d.log_rem !== undefined && d.log_rem > 0) {
+                        document.getElementById('log-active-ui').style.display = 'block';
+                        document.getElementById('log-start-ui').style.display = 'none';
+                        let m = Math.floor(d.log_rem / 60);
+                        let s = d.log_rem % 60;
+                        document.getElementById('logTimer').innerText = (m < 10 ? "0"+m : m) + ":" + (s < 10 ? "0"+s : s);
+                    } else {
+                        document.getElementById('log-active-ui').style.display = 'none';
+                        document.getElementById('log-start-ui').style.display = 'block';
+                    }
 
                     // Dynamiczne kolorowanie diagnostyki Hardware Maszyny z tablicy Truth-Table
                     function setSt(id, st) {
@@ -906,24 +911,6 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
                     document.getElementById('c_musr').value = data.mqtt_usr;
                 }
             });
-
-            // Faza 4: Bezpośrednie odpytanie IP maszyny (jeśli jest znane) o to, czy nagrywanie jest aktualnie w toku
-            if (activeMachineIP && activeMachineIP !== "--" && activeMachineIP !== "Brak (AP)") {
-                fetch(`http://${activeMachineIP}/api/health`)
-                    .then(r => r.json())
-                    .then(hData => {
-                        if(hData.log_rem !== undefined && hData.log_rem > 0) {
-                            document.getElementById('log-active-ui').style.display = 'block';
-                            document.getElementById('log-start-ui').style.display = 'none';
-                            let m = Math.floor(hData.log_rem / 60);
-                            let s = hData.log_rem % 60;
-                            document.getElementById('logTimer').innerText = (m < 10 ? "0"+m : m) + ":" + (s < 10 ? "0"+s : s);
-                        } else {
-                            document.getElementById('log-active-ui').style.display = 'none';
-                            document.getElementById('log-start-ui').style.display = 'block';
-                        }
-                    }).catch(e => {}); // Milczymy przy błędzie odpytywania
-            }
 
         }, 1000); // 1000ms = Sztywny zegar przerwania cyklu pomiarowego
     </script>
