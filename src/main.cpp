@@ -1,13 +1,14 @@
 // =====================================================================================
-// REGULATOR PID - V16.5 (SMART OTA, CZYSTY KOD, CHUNKING, FULL COMMENTS)
+// REGULATOR PID - V16.6 (SMART OTA, CZYSTY KOD, CHUNKING, FULL COMMENTS)
 // =====================================================================================
 #include <Arduino.h>
 #include "strona_www.h" // Załączenie naszej zewnętrznej strony HTML/CSS/JS
+#define FIRMWARE_VERSION "V16.6" // Tu wpisuj aktualną wersję przed wgraniem
 
 // --- BIBLIOTEKI SPRZĘTOWE I SENSORY ---
 #include <Wire.h>               // Komunikacja I2C (Zadajnik, Falowniki)
 #include <SPI.h>                // Komunikacja SPI (Karta SD)
-#include <SD.h>                 // Obsługa systemu plików na karcie SD
+#include <SD.h>                 // Obsługa sysemu plików na karcie SD
 #include <PZEM004Tv30.h>        // Miernik parametrów sieci elektrycznej
 #include <EasyNextionLibrary.h> // Obsługa fizycznego ekranu dotykowego Nextion
 #include <DFRobot_GP8403.h>     // Przetwornik cyfrowo-analogowy (DAC) dla falowników
@@ -281,7 +282,7 @@ void logBootEvent() {
 
     // --- BUDOWA PACZKI TEKSTOWEJ (Znak \r\n to komenda ENTER dla Nextiona) ---
     String logText = "BOOT MASZYNY: " + getTimeString() + "\r\n";
-    logText += "System: Granulator Pro V16.5\r\n";
+    logText += "System: Granulator Pro " + String(FIRMWARE_VERSION) + "\r\n";
     logText += "Adres IP: " + (WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : "Brak-Tryb(AP)") + "\r\n";
     logText += "--- STATUS SPRZETU ---\r\n";
     logText += "Zasilanie (PZEM-004T): " + String(boot_pzem_ok ? "ONLINE (" + String(boot_pzem_v, 1) + " V)" : "OFFLINE / BLAD") + "\r\n";
@@ -1508,6 +1509,9 @@ void setup() {
     
     // Inteligentny raport startowy (Czeka na sieć i czujniki)
     logBootEvent();
+    
+    // --- Wyslanie numeru wersji na strone ustawien Nextiona ---
+    myNex.writeStr("page6.t99.txt", FIRMWARE_VERSION);
     
     triggerBlink(2, 500); 
 }
