@@ -259,13 +259,11 @@ void initSD() {
     }
 }
 
-// 2. Inteligentny raport startowy (wywoływany na samym koncu setup)
+// 2. Inteligentny raport startowy (Zapis na SD + Wysłanie na ekran Nextion)
 void logBootEvent() {
-    // Jeśli karta nie wstała sprzetowo, nie próbujemy nawet otwierać pliku
     if (!statusSD) return;
     
     Serial.println("[NTP] Czekam na synchronizację czasu dla logów...");
-    // Czekamy max 5 sekund na czas z sieci
     for(int i = 0; i < 50; i++) {
         if (getTimeString() != "Brak synchronizacji z siecia") break;
         delay(100);
@@ -281,26 +279,33 @@ void logBootEvent() {
     
     bool boot_iso_ok = (statusDAC || statusADS);
 
+    // --- BUDOWA PACZKI TEKSTOWEJ (Znak \r\n to komenda ENTER dla Nextiona) ---
+    String logText = "BOOT MASZYNY: " + getTimeString() + "\r\n";
+    logText += "System: Granulator Pro V16.5\r\n";
+    logText += "Adres IP: " + (WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : "Brak-Tryb(AP)") + "\r\n";
+    logText += "--- STATUS SPRZETU ---\r\n";
+    logText += "Zasilanie (PZEM-004T): " + String(boot_pzem_ok ? "ONLINE (" + String(boot_pzem_v, 1) + " V)" : "OFFLINE / BLAD") + "\r\n";
+    logText += "Ekran HMI (Nextion): ONLINE (Port UART)\r\n";
+    logText += "Zadajnik (ADS1115): " + String(statusADS ? "ONLINE" : "OFFLINE / BLAD") + "\r\n";
+    logText += "Falowniki (GP8403): " + String(statusDAC ? "ONLINE" : "OFFLINE / BLAD") + "\r\n";
+    logText += "Izolator I2C (ISO1540): " + String(boot_iso_ok ? "ONLINE" : "OFFLINE / BLAD") + "\r\n";
+    logText += "Klimat (DHT11): " + String(boot_dht_ok ? "ONLINE (" + String(boot_temp, 1) + " st.C / " + String(boot_hum, 0) + " %)" : "OFFLINE / BLAD") + "\r\n";
+    logText += "Logi (Karta SD): " + String(statusSD ? "ONLINE" : "OFFLINE");
+
+    // 1. Zapis ułożonego tekstu na kartę SD
     File f = SD.open("/AI_LOG.txt", FILE_APPEND); 
     if (f) { 
         f.println("\n========================================");
-        f.println("BOOT MASZYNY: " + getTimeString());
-        f.println("System: Granulator Pro V16.5");
-        f.println("Adres IP LAN: " + (WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : "Brak-Tryb(AP)"));
-        f.println("--- STATUS SPRZETU ---");
-        f.println("Zasilanie (PZEM-004T): " + String(boot_pzem_ok ? "ONLINE (" + String(boot_pzem_v, 1) + " V)" : "OFFLINE / BLAD"));
-        f.println("Ekran HMI (Nextion): ONLINE (Port UART aktywny)");
-        f.println("Zadajnik (ADS1115): " + String(statusADS ? "ONLINE" : "OFFLINE / BLAD"));
-        f.println("Falowniki (GP8403): " + String(statusDAC ? "ONLINE" : "OFFLINE / BLAD"));
-        f.println("Izolator I2C (ISO1540): " + String(boot_iso_ok ? "ONLINE" : "OFFLINE / BLAD"));
-        f.println("Klimat (DHT11): " + String(boot_dht_ok ? "ONLINE (" + String(boot_temp, 1) + " st.C / " + String(boot_hum, 0) + " %)" : "OFFLINE / BLAD"));
-        f.println("Logi (Karta SD): ONLINE");
-        f.println("========================================");
+        f.print(logText); // Używamy print zamiast println, bo logText ma już swoje entery
+        f.println("\n========================================");
         f.close(); 
         Serial.println("[SYSTEM] Raport startowy zapisany w AI_LOG.txt");
     } else {
         Serial.println("[BLAD] Nie udalo sie otworzyc pliku AI_LOG.txt do zapisu!");
     }
+
+    // 2. STRZAŁ DO EKRANU NEXTION (Zapisuje log w globalnej pamięci strony nr 8)
+    myNex.writeStr("page8.logi.txt", logText);
 }
 
 // Aplikuje limity dolne i górne dla układu DAC oraz algorytmu PID
