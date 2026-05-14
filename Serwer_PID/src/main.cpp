@@ -317,7 +317,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     <div class="header">
         <button id="btn-back" onclick="showDashboard()">🔙 Wróć do Floty</button>
         <img src="https://github.com/KamilBol/Regulator-PID-VSC/blob/main/firmware/Logo/Logo%20Bia%C5%82y%20napis%20na%20czarnym%20tle%20mniejsze.jpg?raw=true" class="main-logo" alt="Logo Bolu">
-        <h1>📡 HUB DOWODZENIA</h1>
+        <h1>📡 HUB DOWODZENIA V16.7</h1>
         <div style="margin-top:5px; font-size:12px; color:#888;">
             IP Serwera HUB: <span id="srvIP">--</span> | <span id="mqStat">Szukam chmury...</span>
         </div>
