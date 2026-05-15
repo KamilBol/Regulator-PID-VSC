@@ -368,7 +368,91 @@ void publishSDList() {
     mqtt.print(json); 
     mqtt.endPublish();
 }
+// =====================================================================================
+// STRUMIENIOWANIE PLIKU DO PC (Chunked HTTP POST)
+// =====================================================================================
+void uploadFileToPC(String filename, String url) {
+    if (!statusSD) return;
+    
+    // Szukamy pliku na karcie
+    File file = SD.open("/" + filename, FILE_READ);
+    if (!file) {
+        Serial.println("[UPLOAD] Blad: Nie znaleziono pliku " + filename);
+        return;
+    }
 
+    Serial.println("[UPLOAD] Rozpoczynam wysylanie: " + filename + " na adres: " + url);
+
+    // Zabezpieczenie HMI: Ściemniamy ekran na czas transferu
+    myNex.writeNum("dim", 15);
+
+    HTTPClient http;
+    size_t fileSize = file.size();
+    size_t bytesSent = 0;
+    uint8_t buffer[512]; // Bufor 512 bajtów - idealny dla ESP32, nie zapycha RAMu
+
+    while (file.available()) {
+        size_t bytesRead = file.read(buffer, sizeof(buffer));
+        bool isLast = (bytesSent + bytesRead) >= fileSize;
+
+        // Inicjalizacja strzału HTTP
+        http.begin(url);
+        // Nasze pancerne zabezpieczenia i nagłówki
+        http.addHeader("X-Secret-Token", "GranulatorSecretToken99");
+        http.addHeader("X-Filename", filename);
+        http.addHeader("X-Is-Last", isLast ? "true" : "false");
+        http.addHeader("Content-Type", "application/octet-stream");
+
+        // Wysłanie paczki i zamknięcie połączenia dla tej części
+        int httpCode = http.POST(buffer, bytesRead);
+        http.end();
+
+        bytesSent += bytesRead;
+
+        // =========================================================
+        // PODTRZYMANIE ŻYCIA MASZYNY W TRAKCIE WYSYŁANIA (PID LOOP)
+        // =========================================================
+        if (systemON) {
+            float i = pzem.current();
+            if (!isnan(i)) {
+                current_Amps = (i * 0.4) + (current_Amps * 0.6); // Filtr
+                
+                // Awaryjne zrzucenie obciążenia
+                if (current_Amps >= (maxLimit + overloadLimit)) {
+                    stopRegulator();
+                    trippedByOverload = true;
+                } else {
+                    // Obliczenia PID
+                    Setpoint = maxLimit - 1.0;
+                    float error = abs(Setpoint - current_Amps);
+                    if (error <= deadbandAmps) Input = Setpoint;
+                    else Input = current_Amps;
+                    
+                    myPID.Compute();
+                    
+                    // Wysterowanie fizyczne DAC
+                    currentDac1 = Output * (dac1Ratio / 100.0); 
+                    currentDac2 = Output * (dac2Ratio / 100.0);
+                    float fDac1 = currentDac1 + dac1Calib;
+                    float fDac2 = currentDac2 + dac2Calib;
+                    if (fDac1 < 0.0) fDac1 = 0.0; if (fDac1 > maxDacVolt) fDac1 = maxDacVolt;
+                    if (fDac2 < 0.0) fDac2 = 0.0; if (fDac2 > maxDacVolt) fDac2 = maxDacVolt;
+                    
+                    dac.setDACOutVoltage((uint16_t)(fDac1 * 1000.0), 0);
+                    dac.setDACOutVoltage((uint16_t)(fDac2 * 1000.0), 1);
+                }
+            }
+        }
+        // Mały oddech dla Watchdoga procesora
+        delay(5); 
+    }
+
+    file.close();
+    Serial.println("[UPLOAD] Zakonczono wysylanie!");
+    
+    // Przywrócenie jasności ekranu po wysłaniu
+    myNex.writeNum("dim", 100);
+}
 // Zmienia napis na ekranie Nextion informujący o trybie danych do chmury
 void updateNextionEcoText() {
     if (cloudEcoMode) {
@@ -603,6 +687,17 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     else if (msg == "CMD:RESTOREDEF") { 
         handleRestoreDefaults(); 
     }
+    else if (msg.startsWith("CMD:UPLOAD:")) {
+        // Dekodujemy komendę np. CMD:UPLOAD:DIAG_14_05.csv|https://link.ngrok.io/api/...
+        int splitIndex = msg.indexOf('|');
+        if (splitIndex > 0) {
+            String filename = msg.substring(11, splitIndex);
+            String url = msg.substring(splitIndex + 1);
+            
+            // Odpalamy funkcję wysyłania (Przez chwilę przytnie inne procesy, ale PID działa!)
+            uploadFileToPC(filename, url);
+        }
+    }
     else if (msg.startsWith("CMD:WIFI:")) {
         int p1 = msg.indexOf(':', 9); 
         routerSSID = msg.substring(9, p1); 
@@ -652,24 +747,26 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     triggerBlink(2, 100); 
 }
 
-// Funkcja obsługująca utrzymanie połączenia z serwerem HiveMQ
+// Otrzymanie i ciągłe potrzymanie pętli w czasie trwania sygnału do Brokera Cloud z zastosowaniem autoryzacji tokenem
 void handleMQTT() {
-    // Przerywamy, jeśli brak konfiguracji lub brak połączenia z siecią
-    if (mqtt_server == "" || routerSSID == "") return;
+    if (mqtt_server == "" || routerSSID == "") return; // Pomiń logikę, jeżeli dane autoryzacji są puste w pamięci EPROM
     if (WiFi.status() != WL_CONNECTED || WiFi.localIP().toString() == "0.0.0.0") return;
 
     if (!mqtt.connected()) {
-        // Próba wznowienia połączenia co 15 sekund
         if (millis() - lastMqttReconnect > 15000) {
             lastMqttReconnect = millis();
+            
+            String cleanHost = cleanHostAddress(mqtt_server);
+            mqtt.setServer(cleanHost.c_str(), 8883); // Port bezpieczny 8883. Wykorzystuje protokoły SSL
+
+            Serial.print("[KONTROLER MQTT] Uzbrajanie pakietu TCP w celu logowania z centralą: " + cleanHost + "...");
             espClient.stop(); 
-            espClient.setInsecure();
+            espClient.setInsecure(); // Procedura pominięcia weryfikacji certyfikatu dla zaufanych domowych kanałów
             
             String clientId = mqtt_id + "-" + String(random(0xffff), HEX);
-            Serial.print("[MQTT] Łączenie z brokerem...");
             
             if (mqtt.connect(clientId.c_str(), mqtt_user.c_str(), mqtt_pass.c_str())) {
-                Serial.println(" POŁĄCZONO!");
+                Serial.println(" SUKCES! Nawiązano tunel.");
                 String subTopic = "biuro/" + mqtt_id + "/rozkazy";
                 mqtt.subscribe(subTopic.c_str());
             } else {
@@ -689,17 +786,18 @@ void handleMQTT() {
             String json; 
             json.reserve(1200); // Rezerwacja pamięci w celu uniknięcia fragmentacji RAM
             
+            // --- OBLICZANIE CZASU LOGOWANIA (WSPÓLNE DLA OBU TRYBÓW) ---
+            int logRem = isLoggingActive ? (logEndTime - millis()) / 1000 : 0;
+            if (logRem < 0) logRem = 0;
+            
             if (cloudEcoMode) {
                 // ==========================
                 // TRYB ECO: Pakiet Thin JSON
-                // Oszczędza aż 95% danych transferu
                 // ==========================
                 json = "{";
                 json += "\"eco\":1,";
-                json += "\"amp\":" + String(current_Amps, 2) + ",";
-                int logRem = isLoggingActive ? (logEndTime - millis()) / 1000 : 0;
-                if (logRem < 0) logRem = 0;
                 json += "\"log_rem\":" + String(logRem) + ",";
+                json += "\"amp\":" + String(current_Amps, 2) + ",";
                 json += "\"sysON\":" + String(systemON ? 1 : 0) + ",";
                 json += "\"trip\":" + String(trippedByOverload ? 1 : 0) + ",";
                 json += "\"autoM\":" + String(modeAUTO ? 1 : 0);
@@ -707,7 +805,6 @@ void handleMQTT() {
             } else {
                 // ==========================
                 // TRYB MAX: Pakiet Thick JSON
-                // Pełen raport diagnostyczny systemu
                 // ==========================
                 float safe_temp = isnan(dht_t) ? 0.0 : dht_t; 
                 float safe_hum = isnan(dht_h) ? 0.0 : dht_h; 
@@ -715,6 +812,7 @@ void handleMQTT() {
                 
                 json = "{";
                 json += "\"eco\":0,";
+                json += "\"log_rem\":" + String(logRem) + ","; // <-- TUTAJ BYŁ BŁĄD! TERAZ JEST DODANE
                 json += "\"amp\":" + String(current_Amps, 2) + ",\"setp\":" + String(Setpoint, 2) + ",";
                 json += "\"sysON\":" + String(systemON ? 1 : 0) + ",\"autoM\":" + String(modeAUTO ? 1 : 0) + ",";
                 json += "\"trip\":" + String(trippedByOverload ? 1 : 0) + ",\"volt\":" + String(pzem_u, 1) + ",";

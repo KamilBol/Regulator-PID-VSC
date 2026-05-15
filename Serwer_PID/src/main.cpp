@@ -687,7 +687,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
             if (mins === 0 && !confirm("Czy na pewno przerwać nagrywanie czarnej skrzynki w maszynie?")) return;
             
             sendCmd('CMD:LOG:' + mins);
-            if(mins > 0) alert("Rozkaz wysłany przez chmurę MQTT!");
+            if(mins > 0) alert("Rozkaz wysłany przez chmurę MQTT! Panel za chwilę zacznie pulsować.");
         }
 
         // Odpalenie zdalnego wgrywania i upewnienie się co do struktury odnośnika internetowego
@@ -764,6 +764,18 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
                     // Interpolacja warunkowa parametrów wycinanych w trybie ECO (uniknięcie wartości undefined w DOM)
                     document.getElementById('setp').innerText = (d.setp !== undefined ? d.setp : "--") + " A";
                     document.getElementById('volt').innerText = (d.volt !== undefined ? d.volt : "--") + " V";
+                    
+                    // --- ODBIÓR STATUSU NAGRYWANIA Z CHMURY (WŁĄCZANIE PANELU) ---
+                    if (d.log_rem !== undefined && d.log_rem > 0) {
+                        document.getElementById('log-active-ui').style.display = 'block';
+                        document.getElementById('log-start-ui').style.display = 'none';
+                        let m = Math.floor(d.log_rem / 60);
+                        let s = d.log_rem % 60;
+                        document.getElementById('logTimer').innerText = (m < 10 ? "0"+m : m) + ":" + (s < 10 ? "0"+s : s);
+                    } else {
+                        document.getElementById('log-active-ui').style.display = 'none';
+                        document.getElementById('log-start-ui').style.display = 'block';
+                    }
                     
                     let btnSys = document.getElementById('btnSys');
                     if (currentSysON === 1) { 
