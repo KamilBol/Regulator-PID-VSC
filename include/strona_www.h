@@ -444,7 +444,7 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     </div>
   </div>
 
-  <div id="SD" class="tab-content">
+<div id="SD" class="tab-content">
     <div class="card">
       <h3 style="margin-top:0; color:var(--yellow);">🧠 Parametry ESP32</h3>
       <div class="row"><span>Uptime:</span> <span class="val" id="esp_up" style="color:var(--text);">--</span></div>
@@ -467,31 +467,40 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     <div class="card">
         <h3 style="margin-top:0;">Eksplorator Karty SD</h3>
         <p class="help-text">Wymaga podłączenia do lokalnej sieci WiFi maszyny, aby pobrać pliki tekstowe z logami systemu.</p>
-        <button onclick="loadSD()" style="padding:10px; background:#444; color:#fff; border:none; width:100%; border-radius:5px;">Odśwież listę plików</button>
+        <button onclick="loadSD()" style="padding:10px; background:#444; color:#fff; border:none; width:100%; border-radius:5px; cursor:pointer;">Odśwież listę plików</button>
         <div id="sd-list" style="margin-top:10px;">Brak plików do wyświetlenia</div>
     </div>
-    <div class="card" style="border: 2px solid var(--purple);">
-        <h3 style="margin-top:0; color:var(--purple);">🔴 Rejestrator Parametrów (Czarna Skrzynka)</h3>
-        <p class="help-text">Moduł zapisuje absolutnie wszystkie 20 kluczowych parametrów maszyny (od prądu po nastawy PID) do pliku AI_DIAG.csv z częstotliwością 1x na sekundę. Używaj tylko do diagnostyki i kalibracji.</p>
-        
-        <div id="log-active-ui" style="display:none; text-align:center; padding: 15px; background:#2a2a2a; border-radius:8px; margin-bottom:15px;">
-            <img src="https://github.com/KamilBol/Regulator-PID-VSC/blob/main/firmware/Logo/Logo%20Bia%C5%82y%20napis%20na%20czarnym%20tle%20mniejsze.jpg?raw=true" style="max-height:50px; border-radius:5px; margin-bottom:10px; animation: pulse 2s infinite;" alt="Logo Rec">
-            <div style="color:var(--red); font-weight:bold; font-size:18px;">🔴 NAGRYWANIE W TOKU</div>
-            <div style="font-size:24px; font-weight:bold; margin-top:5px; color:var(--text);" id="logTimer">--:--</div>
-            <button onclick="triggerLog(0)" style="margin-top:10px; background:var(--red); color:#fff; border:none; padding:10px; border-radius:5px; cursor:pointer; width:100%;">ZATRZYMAJ TERAZ</button>
-        </div>
+    <div class="card" style="border: 2px solid var(--purple); margin-bottom: 20px;">
+        <h3 style="margin-top:0; color:var(--purple);">🔴 Rejestrator Parametrów (Czarna Skrzynka)</h3>
+        <p class="help-text">Moduł zapisuje absolutnie wszystkie 20 kluczowych parametrów maszyny (od prądu po nastawy PID) do pliku AI_DIAG.csv z częstotliwością 1x na sekundę. Używaj tylko do diagnostyki i kalibracji.</p>
+        
+        <div id="log-active-ui" style="display:none; text-align:center; padding: 15px; background:#2a2a2a; border-radius:8px; margin-bottom:15px;">
+            <img src="https://github.com/KamilBol/Regulator-PID-VSC/blob/main/firmware/Logo/Logo%20Bia%C5%82y%20napis%20na%20czarnym%20tle%20mniejsze.jpg?raw=true" style="max-height:50px; border-radius:5px; margin-bottom:10px; animation: pulse 2s infinite;" alt="Logo Rec">
+            <div style="color:var(--red); font-weight:bold; font-size:18px;">🔴 NAGRYWANIE W TOKU</div>
+            <div style="font-size:24px; font-weight:bold; margin-top:5px; color:var(--text);" id="logTimer">--:--</div>
+            <button onclick="triggerLog(0)" style="margin-top:10px; background:var(--red); color:#fff; border:none; padding:10px; border-radius:5px; cursor:pointer; width:100%;">ZATRZYMAJ TERAZ</button>
+        </div>
 
-        <div id="log-start-ui">
-            <div style="display:flex; justify-content:space-between; margin-bottom:5px;">
-                <button onclick="triggerLog(2)" class="submit-btn" style="background:#555; width:30%; margin-top:0; color:#fff;">2 MIN</button>
-                <button onclick="triggerLog(10)" class="submit-btn" style="background:#555; width:30%; margin-top:0; color:#fff;">10 MIN</button>
-                <button onclick="triggerLog(30)" class="submit-btn" style="background:#555; width:30%; margin-top:0; color:#fff;">30 MIN</button>
-            </div>
-        </div>
-    </div>
+        <div id="log-start-ui">
+            <div style="display:flex; gap:10px; align-items:flex-end;">
+                <div style="flex:1;">
+                    <label style="margin-top:0;">Godziny</label>
+                    <input type="number" id="log-h" min="0" max="72" value="0" style="text-align:center; font-size:18px; font-weight:bold;">
+                </div>
+                <div style="flex:1;">
+                    <label style="margin-top:0;">Minuty</label>
+                    <input type="number" id="log-m" min="0" max="59" value="30" style="text-align:center; font-size:18px; font-weight:bold;">
+                </div>
+                <button onclick="startCustomLog()" class="submit-btn" style="background:var(--red); color:#fff; margin-top:0; width:50%; font-size:14px;">🔴 START</button>
+            </div>
+            <div style="display:flex; justify-content:space-between; margin-top:10px;">
+                <button onclick="document.getElementById('log-h').value=0; document.getElementById('log-m').value=10; startCustomLog()" style="background:none; border:1px solid #444; color:#aaa; padding:6px; border-radius:4px; cursor:pointer; width:30%; font-size:11px;">10 Minut</button>
+                <button onclick="document.getElementById('log-h').value=1; document.getElementById('log-m').value=0; startCustomLog()" style="background:none; border:1px solid #444; color:#aaa; padding:6px; border-radius:4px; cursor:pointer; width:30%; font-size:11px;">1 Godzina (1h)</button>
+                <button onclick="document.getElementById('log-h').value=8; document.getElementById('log-m').value=0; startCustomLog()" style="background:none; border:1px solid #444; color:#aaa; padding:6px; border-radius:4px; cursor:pointer; width:30%; font-size:11px;">Pełna Zmiana (8h)</button>
+            </div>
+        </div>
+    </div>
   </div>
-
-  <div id="OTA" class="tab-content">
     <div class="card">
       <h3 style="margin-top:0; color:var(--red);">Aktualizacja Lokalna (Sieć WiFi)</h3>
       <p class="help-text">Użyj tej opcji, jeśli z jakiegoś powodu aktualizacja z chmury (GitHuba) przez Serwer HUB zawiodła. Wybierz plik firmware.bin z dysku komputera.</p>
@@ -633,19 +642,41 @@ const char INDEX_HTML[] PROGMEM = R"rawliteral(
     function saveMQTT(e) { e.preventDefault(); fetch('/api/set_mqtt?srv='+encodeURIComponent(document.getElementById('mqSrv').value)+'&usr='+encodeURIComponent(document.getElementById('mqUsr').value)+'&pas='+encodeURIComponent(document.getElementById('mqPas').value)+'&id='+encodeURIComponent(document.getElementById('mqId').value), {method: 'POST'}).then(() => { alert("Zapisano konfigurację chmury. Restart..."); setTimeout(() => location.reload(), 8000); }); }
     function restartESP() { if(confirm("Na pewno chcesz zrestartować układ sterujący maszyny?")) fetch('/api/restart', {method: 'POST'}).then(() => setTimeout(() => location.reload(), 10000)); }
     function saveDefaults() { if(confirm("Czy na pewno chcesz nadpisać wartości domyślne obecnymi?")) fetch('/api/save_defaults', {method: 'POST'}).then(() => alert("Zapisano w pamięci trwałej!")); }
-    function restoreDefaults() { if(confirm("UWAGA! Ta operacja zresetuje maszynę do ustawień domyślnych. Kontynuować?")) fetch('/api/restore_defaults', {method: 'POST'}).then(() => setTimeout(() => location.reload(), 8000)); }
-    function triggerLog(mins) {
-        if (mins === 0 && !confirm("Przerwać zapisywanie logów?")) return;
-        fetch('/api/start_log?min=' + mins, {method: 'POST'});
-    }
+    function restoreDefaults() { 
+        if(confirm("UWAGA! Ta operacja zresetuje maszynę do ustawień domyślnych. Kontynuować?")) fetch('/api/restore_defaults', {method: 'POST'}).then(() => setTimeout(() => location.reload(), 8000)); 
+    }
     
-    // Generowanie listy plików SD
+    // ==========================================
+    // OBSŁUGA CZARNEJ SKRZYNKI (LOGOWANIE)
+    // ==========================================
+    function startCustomLog() {
+        let h = parseInt(document.getElementById('log-h').value) || 0;
+        let m = parseInt(document.getElementById('log-m').value) || 0;
+        let totalMins = (h * 60) + m;
+        
+        if(totalMins <= 0) {
+            alert("Czas logowania musi być większy niż 0!");
+            return;
+        }
+        triggerLog(totalMins);
+    }
+
+    function triggerLog(mins) {
+        if (mins === 0 && !confirm("Przerwać zapisywanie logów?")) return;
+        fetch('/api/start_log?min=' + mins, {method: 'POST'});
+    }
+    
+    // ==========================================
+    // GENEROWANIE LISTY PLIKÓW SD
+    // ==========================================
     function loadSD() { 
         document.getElementById('sd-list').innerHTML = "Odpytywanie karty pamięci..."; 
         fetch('/api/sd_list').then(r => r.json()).then(d => { 
             let h = ""; 
             d.forEach(f => { h += `<div class='file-item'><a href='/sd_read?f=${f.name}' target='_blank'>📄 ${f.name}</a><span>${f.size} KB</span></div>`; }); 
             document.getElementById('sd-list').innerHTML = h || "Brak logów tekstowych do wyświetlenia."; 
+        }).catch(() => {
+            document.getElementById('sd-list').innerHTML = "<span style='color:var(--red);'>Błąd połączenia z maszyną.</span>";
         }); 
     }
     
