@@ -1922,8 +1922,7 @@ void loop() {
             if (!isResetStage1Active()) {
                 myNex.writeStr("granampery.txt", buf); 
             }
-            
-            myNex.writeStr("natgr.txt", buf);
+myNex.writeStr("natgr.txt", buf);
             sprintf(buf, "%.1f V", pzem_u); 
             myNex.writeStr("napgr.txt", buf);
             sprintf(buf, "%.0f W", pzem_p); 
@@ -1970,8 +1969,8 @@ void loop() {
         
         int apState = memory.getInt("apState", 1); 
         myNex.writeStr("page4.wifilokalonoff.txt", apState == 1 ? "ON" : "OFF");
-    }
-}
+    } // <--- TO JEST PRAWIDŁOWE ZAMKNIĘCIE WARUNKU lastUpdate
+
     // ====================================================================
     // REJESTRATOR DIAGNOSTYCZNY (Zapis wszystkiego w 1 linii na SD)
     // ====================================================================
@@ -1985,14 +1984,15 @@ void loop() {
                 // Użycie wygenerowanej, dynamicznej nazwy pliku!
                 File f = SD.open(currentLogFileName.c_str(), FILE_APPEND);
                 if (f) {
-                    // Budowa paczki z użyciem średników zamiast przecinków
+                    // Budowa paczki poszerzona o opMode i tRamp dla AI
                     String logLine = String(millis()) + ";" + String(systemON) + ";" + String(modeAUTO) + ";" + 
                                      String(trippedByOverload) + ";" + String(current_Amps, 2) + ";" + 
                                      String(Setpoint, 2) + ";" + String(pzem_u, 1) + ";" + String(pzem_p, 0) + ";" + 
                                      String(pzem_s, 0) + ";" + String(pzem_q, 0) + ";" + String(pzem_pf, 2) + ";" + 
                                      String(currentDac1, 2) + ";" + String(currentDac2, 2) + ";" + 
                                      String(dht_t, 1) + ";" + String(dht_h, 0) + ";" + String(Kp, 2) + ";" + 
-                                     String(Ki, 2) + ";" + String(Kd, 2) + ";" + String(minLimit, 1) + ";" + String(maxLimit, 1);
+                                     String(Ki, 2) + ";" + String(Kd, 2) + ";" + String(minLimit, 1) + ";" + 
+                                     String(maxLimit, 1) + ";" + String(opMode) + ";" + String(tRamp, 1);
                     
                     // PRO TRIK: Zamiana kropki na przecinek, żeby polski Excel widział to jako liczby
                     logLine.replace(".", ",");
@@ -2003,7 +2003,7 @@ void loop() {
             }
         }
     }
-}
+} // <--- TO JEST PRAWDZIWY KONIEC FUNKCJI void loop()
 
 bool isResetStage1Active() { 
     return resetStage3; 
