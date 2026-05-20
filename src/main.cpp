@@ -1771,7 +1771,6 @@ void loop() {
             currentDac1 = napiecieZadajnika * (dac1Ratio / 100.0); 
             currentDac2 = napiecieZadajnika * (dac2Ratio / 100.0); 
         } else {
-            // Wartość Output to wyjście z PID (lub 0V jeśli PLC odciął falowniki przy alarmie)
             if (isnan(Output)) {
                 Output = minDacVolt; 
             }
@@ -1807,7 +1806,7 @@ void loop() {
     }
 
     // ====================================================================
-    // KROK 5: ODCZYT PRĄDU (PZEM)
+    // KROK 5: ODCZYT PRĄDU (PZEM) I ALGORYTM PID
     // ====================================================================
     if (millis() - lastPIDTime >= 200) {
         lastPIDTime = millis(); 
@@ -1825,15 +1824,14 @@ void loop() {
         } else {
             current_Amps = (i * 0.4) + (current_Amps * 0.6); 
         }
-    }
 
-    // ====================================================================
-    // KROK 6: DECYZJE PLC (Zewnętrzna Maszyna Stanów)
-    // ====================================================================
-    runMasterLogicStateMachine(); // <--- NOWE SERCE PLC
-}
+        // ====================================================================
+        // KROK 6: DECYZJE PLC (Zewnętrzna Maszyna Stanów MASTER/SLAVE)
+        // ====================================================================
+        runMasterLogicStateMachine(); // <--- NOWE SERCE PLC OCENIA CZY ODCINAĆ PRĄD
         
-        if (systemON) { 
+        // --- STARA LOGIKA PID (Jeśli maszyna stanów nie zablokowała trybu AUTO) ---
+        if (systemON && modeAUTO) { 
             Setpoint = maxLimit - 1.0; 
             
             // Wyliczamy absolutny błąd (odchylenie od celu)
@@ -1853,6 +1851,55 @@ void loop() {
         }
     }
 
+    // ====================================================================
+    // KROK 7: SYSTEM LOGOWANIA (CZARNA SKRZYNKA NA KARCIE SD)
+    // ====================================================================
+    if (isLoggingActive) {
+        if (millis() > logEndTime) {
+            isLoggingActive = false;
+        } else {
+            if (millis() - lastLogWriteTime >= 1000) {
+                lastLogWriteTime = millis();
+                if (statusSD) {
+                    File f = SD.open(currentLogFileName.c_str(), FILE_APPEND);
+                    if (f) {
+                        float safe_temp = isnan(dht_t) ? 0.0 : dht_t;
+                        float safe_hum = isnan(dht_h) ? 0.0 : dht_h;
+                        float safe_pf = isnan(pzem_pf) ? 0.0 : pzem_pf;
+
+                        String line = String(millis()) + ";" +
+                                      String(systemON ? 1 : 0) + ";" +
+                                      String(modeAUTO ? 1 : 0) + ";" +
+                                      String(trippedByOverload ? 1 : 0) + ";" +
+                                      String(current_Amps, 2) + ";" +
+                                      String(Setpoint, 2) + ";" +
+                                      String(pzem_u, 1) + ";" +
+                                      String(pzem_p, 0) + ";" +
+                                      String(pzem_s, 0) + ";" +
+                                      String(pzem_q, 0) + ";" +
+                                      String(safe_pf, 2) + ";" +
+                                      String(currentDac1, 2) + ";" +
+                                      String(currentDac2, 2) + ";" +
+                                      String(safe_temp, 1) + ";" +
+                                      String(safe_hum, 0) + ";" +
+                                      String(Kp, 3) + ";" +
+                                      String(Ki, 3) + ";" +
+                                      String(Kd, 3) + ";" +
+                                      String(minLimit, 1) + ";" +
+                                      String(maxLimit, 1) + ";" +
+                                      String(opMode) + ";" +
+                                      String(tRamp, 1);
+                        f.println(line);
+                        f.close();
+                    }
+                }
+            }
+        }
+    }
+
+    // ====================================================================
+    // KROK 8: WYŚWIETLACZ NEXTION I AKTUALIZACJA TELEMETRII 
+    // ====================================================================
     if (millis() - lastUpdate >= 1000) {
         lastUpdate = millis(); 
         pzem_u = pzem.voltage(); 
@@ -1924,7 +1971,7 @@ void loop() {
         int apState = memory.getInt("apState", 1); 
         myNex.writeStr("page4.wifilokalonoff.txt", apState == 1 ? "ON" : "OFF");
     }
-
+}
     // ====================================================================
     // REJESTRATOR DIAGNOSTYCZNY (Zapis wszystkiego w 1 linii na SD)
     // ====================================================================
