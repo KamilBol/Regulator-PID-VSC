@@ -44,6 +44,7 @@
 #define PIN_SD_MISO       18
 #define PIN_POT_SYMULACJA 3 
 #define PIN_LED           48 
+#define PIN_SYRENA        32 // <--- DODANY PIN SYRENY
 
 // Logika przekaźników (zależna od modułu - tu stan niski załącza przekaźnik)
 #define RELAY_ON          LOW
@@ -104,6 +105,17 @@ float dac1Ratio = 100.0;
 float dac2Ratio = 90.0;  
 float overloadLimit = 7.0; 
 float recoveryLimit = 2.0; 
+
+// --- NOWE PARAMETRY PLC (MASTER/SLAVE I ANOMALIE) ---
+int opMode = 0;                 // 0 = MASTER, 1 = SLAVE
+float limDn = 15.0;             // Próg mokrej trociny (A)
+int sirDnHi = 300, sirDnLo = 300; // Czasy syreny Dół (ms)
+int sirUpHi = 1000, sirUpLo = 500; // Czasy syreny Góra (ms)
+float tGrace = 5.0;             // Okres ochronny startu (s)
+float tRamp = 5.0;              // Czas miękkiego startu (s)
+int sirStart = 1000;            // Syrena ostrzegawcza przed startem (ms)
+int tAutoRes = 15;              // Czas do auto-restartu (s)
+bool manualSirenActive = false; // Stan ręcznej syreny
 
 // --- STANY LOGICZNE SYSTEMU ---
 bool systemON = false; 
@@ -190,6 +202,9 @@ void publishSDList();
 void handleNextionInput(); 
 void processButtonAction(int id); 
 void updateNextionEcoText();
+void runMasterLogicStateMachine();
+void handleSiren();
+float getSoftStartOutput(float requestedOutput);
 
 // =====================================================================================
 // FUNKCJE POMOCNICZE I SYSTEMOWE
@@ -1639,6 +1654,7 @@ void setup() {
 void loop() {
     handleLED(); 
     handleMQTT();
+    handleSiren(); // <--- ZEWNĘTRZNA OBSŁUGA SYRENY PLC (Z MasterLogic.cpp)
     
     if (isWifiAPActive) {
         server.handleClient();
@@ -1730,11 +1746,10 @@ void loop() {
         int16_t adc_surowe = 0; 
         
         if (statusADS) {
-            // Abstrakcja sprzętowa - wybór wejścia na podstawie ustawień
             if (typZadajnika == 0) {
-                adc_surowe = ads.readADC_SingleEnded(0); // Pin A0 (Dzielnik napięcia 0-10V)
+                adc_surowe = ads.readADC_SingleEnded(0); 
             } else {
-                adc_surowe = ads.readADC_SingleEnded(1); // Pin A1 (Rezystor prądowy mA)
+                adc_surowe = ads.readADC_SingleEnded(1); 
             }
         }
         
@@ -1751,18 +1766,28 @@ void loop() {
             napiecieZadajnika = (aktualny_odczyt * filtr_waga) + (napiecieZadajnika * (1.0 - filtr_waga));
         }
 
+        // --- ZMIANA PLC: Logika Soft-Startu nadpisuje napięcie DAC, gdy maszyna jest w trakcie rozruchu ---
         if (!systemON) { 
             currentDac1 = napiecieZadajnika * (dac1Ratio / 100.0); 
             currentDac2 = napiecieZadajnika * (dac2Ratio / 100.0); 
         } else {
+            // Wartość Output to wyjście z PID (lub 0V jeśli PLC odciął falowniki przy alarmie)
             if (isnan(Output)) {
                 Output = minDacVolt; 
             }
-            currentDac1 = Output * (dac1Ratio / 100.0); 
-            currentDac2 = Output * (dac2Ratio / 100.0); 
             
-            if (currentDac1 < minDacVolt) currentDac1 = minDacVolt; 
-            if (currentDac2 < minDacVolt) currentDac2 = minDacVolt;
+            // Soft-Start Modyfikator z MasterLogic
+            float activeOutput = getSoftStartOutput(Output); 
+
+            currentDac1 = activeOutput * (dac1Ratio / 100.0); 
+            currentDac2 = activeOutput * (dac2Ratio / 100.0); 
+            
+            // Tylko poza alarmem zabezpieczamy dolne widełki, żeby maszyna mogła ruszyć.
+            // Przy alarmie getSoftStartOutput zwraca 0.0V, ucinając twardo falowniki.
+            if(activeOutput > 0.0) {
+                if (currentDac1 < minDacVolt) currentDac1 = minDacVolt; 
+                if (currentDac2 < minDacVolt) currentDac2 = minDacVolt;
+            }
         }
 
         float finalDac1 = currentDac1 + dac1Calib; 
@@ -1781,6 +1806,9 @@ void loop() {
         }
     }
 
+    // ====================================================================
+    // KROK 5: ODCZYT PRĄDU (PZEM)
+    // ====================================================================
     if (millis() - lastPIDTime >= 200) {
         lastPIDTime = millis(); 
         float i = pzem.current(); 
@@ -1797,17 +1825,13 @@ void loop() {
         } else {
             current_Amps = (i * 0.4) + (current_Amps * 0.6); 
         }
-        
-        if (systemON && current_Amps >= (maxLimit + overloadLimit)) { 
-            stopRegulator(); 
-            trippedByOverload = true; 
-        }
-        
-        if (!systemON && trippedByOverload && modeAUTO) { 
-            if (current_Amps <= (minLimit + recoveryLimit)) {
-                startRegulator(); 
-            }
-        }
+    }
+
+    // ====================================================================
+    // KROK 6: DECYZJE PLC (Zewnętrzna Maszyna Stanów)
+    // ====================================================================
+    runMasterLogicStateMachine(); // <--- NOWE SERCE PLC
+}
         
         if (systemON) { 
             Setpoint = maxLimit - 1.0; 
